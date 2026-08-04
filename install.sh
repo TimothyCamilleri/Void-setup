@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -e
 
-echo "=== 1. Updating System & Enabling Repositories (RPM Fusion, Flathub, COPRs) ==="
+echo "=== 1. Cleaning Server Packages & Setting Desktop Identity ==="
+# Remove server-specific management tools and set Fedora Workstation branding
+sudo dnf remove -y cockpit* fedora-release-server || true
+sudo dnf install -y fedora-release-workstation fedora-repos
+sudo systemctl set-default graphical.target
+
+echo "=== 2. Updating System & Enabling Repositories (RPM Fusion, Flathub, COPRs) ==="
 sudo dnf update -y
 
-# Enable RPM Fusion (Free & Non-Free for codecs, Steam, extra software)
+# Enable RPM Fusion (Free & Non-Free)
 sudo dnf install -y \
   https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
   https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
@@ -21,7 +27,7 @@ sudo dnf copr enable -y celestelove/caelestia
 
 sudo dnf check-update || true
 
-echo "=== 2. Installing Hyprland & Caelestia Shell ==="
+echo "=== 3. Installing Hyprland & Caelestia Shell ==="
 sudo dnf install -y \
   hyprland \
   xdg-desktop-portal-hyprland \
@@ -34,7 +40,7 @@ sudo dnf install -y \
   caelestia-shell \
   caelestia-cli
 
-echo "=== 3. Installing Native Fedora (RPM) Packages ==="
+echo "=== 4. Installing Native Fedora (RPM) Packages ==="
 sudo dnf install -y \
   godot \
   mgba \
@@ -50,8 +56,7 @@ sudo dnf install -y \
   python3-pyqt6 \
   python3-pyqt6-svg
 
-echo "=== 4. Installing Flatpak Applications ==="
-# VS Code, Bottles, Lutris, Prism Launcher, Discord, PokeMMO
+echo "=== 5. Installing Flatpak Applications ==="
 flatpak install -y flathub com.visualstudio.code
 flatpak install -y flathub com.usebottles.bottles
 flatpak install -y flathub net.lutris.Lutris
@@ -59,17 +64,17 @@ flatpak install -y flathub org.prismlauncher.PrismLauncher
 flatpak install -y flathub com.discordapp.Discord
 flatpak install -y flathub com.pokemmo.PokeMMO
 
-echo "=== 5. Setting up Native Discord (Tarball Local Install) ==="
+echo "=== 6. Setting up Native Discord ==="
 TMP_DISCORD=$(mktemp -d)
 curl -L "https://discord.com/api/download?platform=linux&format=tar.gz" -o "$TMP_DISCORD/discord.tar.gz"
 sudo tar -xzf "$TMP_DISCORD/discord.tar.gz" -C /opt/
 sudo ln -sf /opt/Discord/Discord /usr/local/bin/discord-native
 rm -rf "$TMP_DISCORD"
 
-echo "=== 6. Setting up Windows Compatibility Apps (Photoshop, Clip Studio, Affinity) ==="
+echo "=== 7. Setting up Windows Compatibility Helpers (Affinity) ==="
 git clone https://github.com/ryzendew/Linux-Affinity-Installer.git ~/.local/share/affinity-installer || true
 
-echo "=== 7. Configuring Hyprland Autostart for Caelestia ==="
+echo "=== 8. Configuring Hyprland Autostart for Caelestia ==="
 mkdir -p ~/.config/hypr
 HYPR_CONF=~/.config/hypr/hyprland.conf
 
@@ -85,9 +90,5 @@ fi
 
 echo "====================================================================="
 echo "INSTALLATION COMPLETE!"
+echo "Server packages removed, desktop setup ready."
 echo "====================================================================="
-echo ""
-echo "Next Steps:"
-echo "1. Reboot or log out of your TTY session."
-echo "2. Start Hyprland by running: Hyprland"
-echo "3. Caelestia Shell will launch automatically in your session."
