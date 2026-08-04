@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
-echo "=== 1. Cleaning Server Packages & Setting Desktop Identity ==="
-# Remove server-specific management tools and set Fedora Workstation branding
-sudo dnf remove -y cockpit* fedora-release-server || true
-sudo dnf install -y fedora-release-workstation fedora-repos
-sudo systemctl set-default graphical.target
+echo "=== 1. Setting Sudo Password Cache to Never Expire ==="
+# Prevents sudo from asking for a password again after the first authentication
+echo "Defaults timestamp_timeout=-1" | sudo tee /etc/sudoers.d/99-no-password-timeout
+sudo chmod 0440 /etc/sudoers.d/99-no-password-timeout
 
 echo "=== 2. Updating System & Enabling Repositories (RPM Fusion, Flathub, COPRs) ==="
 sudo dnf update -y
@@ -90,5 +89,5 @@ fi
 
 echo "====================================================================="
 echo "INSTALLATION COMPLETE!"
-echo "Server packages removed, desktop setup ready."
+echo "Hyprland & Caelestia setup alongside existing KDE environment."
 echo "====================================================================="
