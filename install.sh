@@ -50,6 +50,19 @@ flatpak install -y flathub org.prismlauncher.PrismLauncher
 flatpak install -y flathub com.discordapp.Discord
 flatpak install -y flathub com.pokemmo.PokeMMO
 
+echo "=== 5.Remove KDE ==="
+sudo dnf remove -y \
+  @kde-desktop \
+  @kde-apps \
+  @kde-media \
+  plasma-* \
+  sddm* \
+  kwin* \
+  kde-* \
+  kf5-* \
+  kf6-*
+
+
 echo "=== 6. Configuring Hyprland ==="
 mkdir -p ~/.config/hypr
 HYPR_CONF=~/.config/hypr/hyprland.conf
