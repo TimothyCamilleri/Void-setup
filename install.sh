@@ -23,17 +23,8 @@ sudo dnf copr enable -y brycensranch/gpu-screen-recorder-git
 sudo dnf copr enable -y celestelove/caelestia
 
 echo "=== 3. Installing Hyprland & Caelestia Shell ==="
-sudo dnf install -y \
-  hyprland \
-  xdg-desktop-portal-hyprland \
-  fish \
-  git \
-  quickshell-git \
-  libcava-devel \
-  app2unit \
-  gpu-screen-recorder-ui \
-  caelestia-shell \
-  caelestia-cli
+ 
+sudo dnf install -y hyprland xdg-desktop-portal-hyprland fish git quickshell-git libcava-devel app2unit gpu-screen-recorder-ui caelestia-shell caelestia-cli
 
 echo "=== 4. Installing RPM Applications ==="
 sudo dnf install -y \
