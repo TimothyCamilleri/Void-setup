@@ -9,7 +9,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 echo "======================================================"
-echo "    AUTOMATED VOID LINUX + XFCE INSTALLER (W/ SWAP)   "
+echo "   AUTOMATED VOID LINUX + CUSTOM XFCE RICE INSTALLER  "
 echo "======================================================"
 echo ""
 
@@ -54,6 +54,7 @@ echo " EFI Partition:   $PART_EFI (512MB)"
 echo " Swap Partition:  $PART_SWAP (${SWAP_SIZE}GB)"
 echo " Root Partition:  $PART_ROOT (Remaining Space)"
 echo " Username:        $USERNAME"
+echo " Custom Dotfiles: https://github.com/mehedirm6244/My_XFCE_dotties"
 echo "------------------------------------------------------"
 read -p "Type 'YES' to start installation: " CONFIRM
 
@@ -82,10 +83,12 @@ mkdir -p /mnt/boot/efi
 mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
 
-echo "==> [4/7] Installing Void Linux Base System & XFCE..."
-# Installs packages locally from Live ISO cache for maximum speed
+echo "==> [4/7] Installing Base System, Desktop, Fonts, and Apps..."
+# Update XBPS and install core + custom rice packages
 XBPS_ARCH=$(uname -m) xbps-install -Sy -R /hostbuf/binpkgs -r /mnt \
-  base-system xfce4 lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager
+  base-system xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
+  git curl wget picom plank cava jq htop unzip \
+  font-roboto-ttf font-jetbrains-mono-ttf
 
 echo "==> [5/7] Generating /etc/fstab..."
 mkdir -p /mnt/etc
@@ -99,7 +102,7 @@ UUID=$UUID_EFI /boot/efi vfat defaults 0 2
 UUID=$UUID_SWAP swap swap defaults 0 0
 EOF
 
-echo "==> [6/7] Configuring Users, Sudo, Services, and Bootloader..."
+echo "==> [6/7] Configuring System, User, Services, and Cloning Dotfiles..."
 xchroot /mnt /bin/bash <<EOF
 # Set Passwords
 echo "root:$ROOT_PASS" | chpasswd
@@ -113,6 +116,23 @@ echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
 ln -s /etc/sv/dbus /etc/runit/runsvdir/default/
 ln -s /etc/sv/lightdm /etc/runit/runsvdir/default/
 ln -s /etc/sv/NetworkManager /etc/runit/runsvdir/default/
+
+# Clone custom XFCE dotfiles and set permissions for user
+su - "$USERNAME" -c "
+  git clone https://github.com/mehedirm6244/My_XFCE_dotties.git ~/My_XFCE_dotties
+  mkdir -p ~/.config ~/.themes ~/.icons ~/.local/share/fonts
+  
+  # Copy config files if present in repo
+  if [ -d ~/My_XFCE_dotties/.config ]; then
+    cp -r ~/My_XFCE_dotties/.config/* ~/.config/
+  fi
+  if [ -d ~/My_XFCE_dotties/.themes ]; then
+    cp -r ~/My_XFCE_dotties/.themes/* ~/.themes/
+  fi
+  if [ -d ~/My_XFCE_dotties/.icons ]; then
+    cp -r ~/My_XFCE_dotties/.icons/* ~/.icons/
+  fi
+"
 
 # Install GRUB bootloader
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void"
