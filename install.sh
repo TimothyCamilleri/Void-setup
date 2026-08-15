@@ -1,7 +1,24 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
-# Clear screen and ensure root execution
+# Cleanup trap to unmount everything safely on unexpected failure
+cleanup() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo ""
+        echo "======================================================"
+        echo " ERROR OCCURRED! Cleaning up mounted filesystems...  "
+        echo "======================================================"
+        umount -l /mnt/dev 2>/dev/null || true
+        umount -l /mnt/proc 2>/dev/null || true
+        umount -l /mnt/sys 2>/dev/null || true
+        umount -l /mnt/run 2>/dev/null || true
+        swapoff -a 2>/dev/null || true
+        umount -R /mnt 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
 clear
 if [ "$(id -u)" -ne 0 ]; then
   echo "Error: Please run this script with sudo or as root!"
@@ -13,7 +30,16 @@ echo "   AUTOMATED VOID LINUX + CUSTOM XFCE RICE INSTALLER  "
 echo "======================================================"
 echo ""
 
+# Pre-flight Check: Internet Connection
+echo "==> Verifying network connectivity..."
+if ! ping -c 1 -W 3 repo-default.voidlinux.org >/dev/null 2>&1; then
+    echo "Error: No internet connection detected or mirror is unreachable."
+    echo "Please configure your network before running this script."
+    exit 1
+fi
+
 # 1. Select Target Drive
+echo ""
 echo "Available Storage Drives:"
 lsblk -d -n -o NAME,SIZE,TYPE,MODEL | grep -E "disk"
 echo ""
@@ -25,7 +51,14 @@ if [ ! -b "$DISK" ]; then
     exit 1
 fi
 
-# Determine partition naming scheme (e.g., /dev/sda1 vs /dev/nvme0n1p1)
+# Ensure drive isn't actively mounted
+if grep -qs "$DISK" /proc/mounts; then
+    echo "Error: Disk $DISK or one of its partitions is currently mounted!"
+    echo "Unmount the drive and run the script again."
+    exit 1
+fi
+
+# Determine partition naming scheme
 if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
     PART_EFI="${DISK}p1"
     PART_SWAP="${DISK}p2"
@@ -36,7 +69,7 @@ else
     PART_ROOT="${DISK}3"
 fi
 
-# 2. Gather User Inputs & Swap Choice
+# 2. Gather User Inputs
 echo ""
 read -p "Enter Swap size in GB (e.g., 2, 4, 8): " SWAP_SIZE
 read -p "Enter your desired Username: " USERNAME
@@ -46,7 +79,13 @@ read -sp "Enter Root Password: " ROOT_PASS
 echo ""
 echo ""
 
-# 3. Confirmation Warning
+# Verify inputs aren't empty
+if [ -z "$USERNAME" ] || [ -z "$USER_PASS" ] || [ -z "$ROOT_PASS" ] || [ -z "$SWAP_SIZE" ]; then
+    echo "Error: All input fields are required."
+    exit 1
+fi
+
+# 3. Confirmation
 echo "------------------------------------------------------"
 echo " WARNING: ALL DATA ON $DISK WILL BE DELETED!"
 echo " Target Disk:     $DISK"
@@ -101,62 +140,59 @@ UUID=$UUID_EFI /boot/efi vfat defaults 0 2
 UUID=$UUID_SWAP swap swap defaults 0 0
 EOF
 
-# Copy DNS config so network works inside chroot
 cp /etc/resolv.conf /mnt/etc/resolv.conf
 
 echo "==> [6/7] Configuring System, User, Services, and Dotfiles..."
 
-# Bind essential API filesystems for GRUB EFI access
+# Bind API filesystems for chroot EFI & device access
 for sysfs in /dev /proc /sys /run; do
     mount --bind "$sysfs" "/mnt$sysfs"
 done
 
-chroot /mnt /bin/bash <<EOF
+# Pass host variables explicitly to chroot environment
+export ROOT_PASS USERNAME USER_PASS
+
+chroot /mnt /bin/bash <<'EOF'
+set -e
+
 # Set Passwords
 echo "root:$ROOT_PASS" | chpasswd
 useradd -m -G wheel,audio,video,input,storage -s /bin/bash "$USERNAME"
 echo "$USERNAME:$USER_PASS" | chpasswd
 
-# Grant Sudo rights to wheel group with strict secure permissions
+# Sudo setup for wheel group
 echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
 chmod 0440 /etc/sudoers.d/wheel
 
-# Enable necessary runit services
+# Enable runit services
 ln -s /etc/sv/dbus /etc/runit/runsvdir/default/
 ln -s /etc/sv/elogind /etc/runit/runsvdir/default/
 ln -s /etc/sv/polkitd /etc/runit/runsvdir/default/
 ln -s /etc/sv/lightdm /etc/runit/runsvdir/default/
 ln -s /etc/sv/NetworkManager /etc/runit/runsvdir/default/
 
-# Target home directory
+# Dotfiles deployment
 USER_HOME="/home/$USERNAME"
-mkdir -p "\$USER_HOME/.config" "\$USER_HOME/.themes" "\$USER_HOME/.icons"
+mkdir -p "$USER_HOME/.config" "$USER_HOME/.themes" "$USER_HOME/.icons"
 
-# Enable dotglob so hidden files are included in wildcards
 shopt -s dotglob
+rm -rf "$USER_HOME/dotties_temp"
+git clone --depth 1 https://github.com/mehedirm6244/My_XFCE_dotties.git "$USER_HOME/dotties_temp"
 
-# Clone dotfiles
-rm -rf "\$USER_HOME/dotties_temp"
-git clone --depth 1 https://github.com/mehedirm6244/My_XFCE_dotties.git "\$USER_HOME/dotties_temp"
-
-# Auto-detect dotfile tree structure (handles direct or nested /Dotfiles layout)
-SRC_DIR="\$USER_HOME/dotties_temp"
-if [ -d "\$USER_HOME/dotties_temp/Dotfiles" ]; then
-    SRC_DIR="\$USER_HOME/dotties_temp/Dotfiles"
+SRC_DIR="$USER_HOME/dotties_temp"
+if [ -d "$USER_HOME/dotties_temp/Dotfiles" ]; then
+    SRC_DIR="$USER_HOME/dotties_temp/Dotfiles"
 fi
 
-if [ -d "\$SRC_DIR" ]; then
-    [ -d "\$SRC_DIR/.config" ] && cp -r "\$SRC_DIR/.config/"* "\$USER_HOME/.config/" 2>/dev/null || true
-    [ -d "\$SRC_DIR/.themes" ] && cp -r "\$SRC_DIR/.themes/"* "\$USER_HOME/.themes/" 2>/dev/null || true
-    [ -d "\$SRC_DIR/.icons" ] && cp -r "\$SRC_DIR/.icons/"* "\$USER_HOME/.icons/" 2>/dev/null || true
-    rm -rf "\$USER_HOME/dotties_temp"
+if [ -d "$SRC_DIR" ]; then
+    [ -d "$SRC_DIR/.config" ] && cp -r "$SRC_DIR/.config/"* "$USER_HOME/.config/" 2>/dev/null || true
+    [ -d "$SRC_DIR/.themes" ] && cp -r "$SRC_DIR/.themes/"* "$USER_HOME/.themes/" 2>/dev/null || true
+    [ -d "$SRC_DIR/.icons" ] && cp -r "$SRC_DIR/.icons/"* "$USER_HOME/.icons/" 2>/dev/null || true
+    rm -rf "$USER_HOME/dotties_temp"
 fi
-
-# Disable dotglob back to default
 shopt -u dotglob
 
-# Fix ownership permissions for the user
-chown -R "$USERNAME:$USERNAME" "\$USER_HOME"
+chown -R "$USERNAME:$USERNAME" "$USER_HOME"
 
 # Re-generate initramfs images explicitly before GRUB installation
 dracut --regenerate-all --force
@@ -166,8 +202,7 @@ grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void
 update-grub
 EOF
 
-echo "==> [7/7] Unmounting partitions..."
-# Safely unmount bound virtual filesystems
+echo "==> [7/7] Unmounting partitions cleanly..."
 umount -l /mnt/dev || true
 umount -l /mnt/proc || true
 umount -l /mnt/sys || true
@@ -175,6 +210,9 @@ umount -l /mnt/run || true
 
 swapoff "$PART_SWAP"
 umount -R /mnt
+
+# Disable trap after successful completion
+trap - EXIT
 
 echo ""
 echo "======================================================"
