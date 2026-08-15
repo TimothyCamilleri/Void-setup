@@ -159,15 +159,27 @@ mkdir -p /mnt/boot/efi
 mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
 
-# 6. Installing Packages
+# 6. Installing Repositories & Base Packages
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [4/7] Installing Base System, Desktop, & Apps...     ${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [4/7] Enabling Nonfree Repos & Installing Packages... ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
-XBPS_ARCH=x86_64 xbps-install -Sy -R https://repo-default.voidlinux.org/current -r /mnt \
+
+# Step A: Install base keys & sync main repository
+XBPS_ARCH=x86_64 xbps-install -Sy -R https://repo-default.voidlinux.org/current -r /mnt
+
+# Step B: Install Nonfree & Multilib repository packages
+XBPS_ARCH=x86_64 xbps-install -y -R https://repo-default.voidlinux.org/current -r /mnt \
+  void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
+
+# Step C: Sync all newly added repositories
+XBPS_ARCH=x86_64 xbps-install -Sy -r /mnt
+
+# Step D: Install full software suite
+XBPS_ARCH=x86_64 xbps-install -y -r /mnt \
   base-system xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip ca-certificates sudo \
-  elogind polkit Roboto-fonts jetbrains-mono
+  elogind polkit font-roboto-ttf jetbrains-mono
 
 # 7. System Setup
 clear
