@@ -1,14 +1,22 @@
 #!/bin/bash
 set -eo pipefail
 
+# Define ANSI Color Codes
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_RED="\033[1;31m"
+C_GREEN="\033[1;32m"
+C_YELLOW="\033[1;33m"
+C_CYAN="\033[1;36m"
+C_MAGENTA="\033[1;35m"
+
 # Cleanup trap to unmount everything safely on unexpected failure
 cleanup() {
     local exit_code=$?
     if [ $exit_code -ne 0 ]; then
-        echo ""
-        echo "======================================================"
-        echo " ERROR OCCURRED! Cleaning up mounted filesystems...  "
-        echo "======================================================"
+        echo -e "\n${C_RED}======================================================${C_RESET}"
+        echo -e "${C_RED} ERROR OCCURRED! Cleaning up mounted filesystems...  ${C_RESET}"
+        echo -e "${C_RED}======================================================${C_RESET}"
         umount -l /mnt/dev 2>/dev/null || true
         umount -l /mnt/proc 2>/dev/null || true
         umount -l /mnt/sys 2>/dev/null || true
@@ -21,40 +29,39 @@ trap cleanup EXIT
 
 clear
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Error: Please run this script with sudo or as root!"
+  echo -e "${C_RED}Error: Please run this script with sudo or as root!${C_RESET}"
   exit 1
 fi
 
-echo "======================================================"
-echo "   AUTOMATED VOID LINUX + CUSTOM XFCE RICE INSTALLER  "
-echo "======================================================"
-echo ""
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo -e "${C_CYAN}${C_BOLD}   AUTOMATED VOID LINUX + CUSTOM XFCE RICE INSTALLER  ${C_RESET}"
+echo -e "${C_CYAN}======================================================${C_RESET}\n"
 
 # Pre-flight Check: Internet Connection
-echo "==> Verifying network connectivity..."
+echo -e "${C_MAGENTA}==> Verifying network connectivity...${C_RESET}"
 if ! ping -c 1 -W 3 repo-default.voidlinux.org >/dev/null 2>&1; then
-    echo "Error: No internet connection detected or mirror is unreachable."
-    echo "Please configure your network before running this script."
+    echo -e "${C_RED}Error: No internet connection detected or mirror is unreachable.${C_RESET}"
+    echo -e "${C_RED}Please configure your network before running this script.${C_RESET}"
     exit 1
 fi
+echo -e "${C_GREEN}Network OK.${C_RESET}\n"
 
 # 1. Select Target Drive
-echo ""
-echo "Available Storage Drives:"
+echo -e "${C_YELLOW}Available Storage Drives:${C_RESET}"
 lsblk -d -n -o NAME,SIZE,TYPE,MODEL | grep -E "disk"
 echo ""
-read -p "Enter target disk name (e.g., sda, nvme0n1): " DISK_NAME
+read -p "$(echo -e ${C_BOLD}"Enter target disk name (e.g., sda, nvme0n1): "${C_RESET})" DISK_NAME
 DISK="/dev/${DISK_NAME}"
 
 if [ ! -b "$DISK" ]; then
-    echo "Error: Device $DISK does not exist!"
+    echo -e "${C_RED}Error: Device $DISK does not exist!${C_RESET}"
     exit 1
 fi
 
 # Ensure drive isn't actively mounted
 if grep -qs "$DISK" /proc/mounts; then
-    echo "Error: Disk $DISK or one of its partitions is currently mounted!"
-    echo "Unmount the drive and run the script again."
+    echo -e "${C_RED}Error: Disk $DISK or one of its partitions is currently mounted!${C_RESET}"
+    echo -e "${C_RED}Unmount the drive and run the script again.${C_RESET}"
     exit 1
 fi
 
@@ -71,39 +78,37 @@ fi
 
 # 2. Gather User Inputs
 echo ""
-read -p "Enter Swap size in GB (e.g., 2, 4, 8): " SWAP_SIZE
-read -p "Enter your desired Username: " USERNAME
-read -sp "Enter Password for $USERNAME: " USER_PASS
+read -p "$(echo -e ${C_BOLD}"Enter Swap size in GB (e.g., 2, 4, 8): "${C_RESET})" SWAP_SIZE
+read -p "$(echo -e ${C_BOLD}"Enter your desired Username: "${C_RESET})" USERNAME
+read -sp "$(echo -e ${C_BOLD}"Enter Password for $USERNAME: "${C_RESET})" USER_PASS
 echo ""
-read -sp "Enter Root Password: " ROOT_PASS
-echo ""
-echo ""
+read -sp "$(echo -e ${C_BOLD}"Enter Root Password: "${C_RESET})" ROOT_PASS
+echo -e "\n"
 
 # Verify inputs aren't empty
 if [ -z "$USERNAME" ] || [ -z "$USER_PASS" ] || [ -z "$ROOT_PASS" ] || [ -z "$SWAP_SIZE" ]; then
-    echo "Error: All input fields are required."
+    echo -e "${C_RED}Error: All input fields are required.${C_RESET}"
     exit 1
 fi
 
-# 3. Confirmation
-echo "------------------------------------------------------"
-echo " WARNING: ALL DATA ON $DISK WILL BE DELETED!"
-echo " Target Disk:     $DISK"
-echo " EFI Partition:   $PART_EFI (512MB)"
-echo " Swap Partition:  $PART_SWAP (${SWAP_SIZE}GB)"
-echo " Root Partition:  $PART_ROOT (Remaining Space)"
-echo " Username:        $USERNAME"
-echo " Custom Dotfiles: https://github.com/mehedirm6244/My_XFCE_dotties"
-echo "------------------------------------------------------"
-read -p "Type 'YES' to start installation: " CONFIRM
+# 3. Confirmation Warning
+echo -e "${C_RED}------------------------------------------------------${C_RESET}"
+echo -e "${C_RED}${C_BOLD} WARNING: ALL DATA ON $DISK WILL BE DELETED!${C_RESET}"
+echo -e "${C_YELLOW} Target Disk:     ${C_RESET}${C_BOLD}$DISK${C_RESET}"
+echo -e "${C_YELLOW} EFI Partition:   ${C_RESET}$PART_EFI (512MB)"
+echo -e "${C_YELLOW} Swap Partition:  ${C_RESET}$PART_SWAP (${SWAP_SIZE}GB)"
+echo -e "${C_YELLOW} Root Partition:  ${C_RESET}$PART_ROOT (Remaining Space)"
+echo -e "${C_YELLOW} Username:        ${C_RESET}$USERNAME"
+echo -e "${C_YELLOW} Custom Dotfiles: ${C_RESET}https://github.com/mehedirm6244/My_XFCE_dotties"
+echo -e "${C_RED}------------------------------------------------------${C_RESET}"
+read -p "$(echo -e ${C_RED}${C_BOLD}"Type 'YES' to start installation: "${C_RESET})" CONFIRM
 
 if [ "$CONFIRM" != "YES" ]; then
-    echo "Installation canceled."
+    echo -e "${C_YELLOW}Installation canceled.${C_RESET}"
     exit 1
 fi
 
-echo ""
-echo "==> [1/7] Wiping and Partitioning $DISK (GPT)..."
+echo -e "\n${C_MAGENTA}==> [1/7] Wiping and Partitioning $DISK (GPT)...${C_RESET}"
 sfdisk "$DISK" <<EOF
 label: gpt
 size=512M, type=U, name="EFI"
@@ -111,24 +116,24 @@ size=${SWAP_SIZE}G, type=S, name="SWAP"
 size=+, type=L, name="ROOT"
 EOF
 
-echo "==> [2/7] Formatting partitions..."
+echo -e "${C_MAGENTA}==> [2/7] Formatting partitions...${C_RESET}"
 mkfs.vfat -F32 "$PART_EFI"
 mkswap "$PART_SWAP"
 mkfs.ext4 -F "$PART_ROOT"
 
-echo "==> [3/7] Mounting filesystems..."
+echo -e "${C_MAGENTA}==> [3/7] Mounting filesystems...${C_RESET}"
 mount "$PART_ROOT" /mnt
 mkdir -p /mnt/boot/efi
 mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
 
-echo "==> [4/7] Installing Base System, Desktop, Fonts, and Apps..."
+echo -e "${C_MAGENTA}==> [4/7] Installing Base System, Desktop, Fonts, and Apps...${C_RESET}"
 XBPS_ARCH=x86_64 xbps-install -Sy -R https://repo-default.voidlinux.org/current -r /mnt \
   base-system xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip ca-certificates sudo \
   elogind polkitd Roboto-fonts jetbrains-mono
 
-echo "==> [5/7] Generating /etc/fstab and DNS settings..."
+echo -e "${C_MAGENTA}==> [5/7] Generating /etc/fstab and DNS settings...${C_RESET}"
 mkdir -p /mnt/etc
 UUID_ROOT=$(blkid -s UUID -o value "$PART_ROOT")
 UUID_EFI=$(blkid -s UUID -o value "$PART_EFI")
@@ -142,7 +147,7 @@ EOF
 
 cp /etc/resolv.conf /mnt/etc/resolv.conf
 
-echo "==> [6/7] Configuring System, User, Services, and Dotfiles..."
+echo -e "${C_MAGENTA}==> [6/7] Configuring System, User, Services, and Dotfiles...${C_RESET}"
 
 # Bind API filesystems for chroot EFI & device access
 for sysfs in /dev /proc /sys /run; do
@@ -202,7 +207,7 @@ grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void
 update-grub
 EOF
 
-echo "==> [7/7] Unmounting partitions cleanly..."
+echo -e "${C_MAGENTA}==> [7/7] Unmounting partitions cleanly...${C_RESET}"
 umount -l /mnt/dev || true
 umount -l /mnt/proc || true
 umount -l /mnt/sys || true
@@ -214,7 +219,6 @@ umount -R /mnt
 # Disable trap after successful completion
 trap - EXIT
 
-echo ""
-echo "======================================================"
-echo "    INSTALLATION COMPLETE! YOU CAN REBOOT NOW         "
-echo "======================================================"
+echo -e "\n${C_GREEN}======================================================${C_RESET}"
+echo -e "${C_GREEN}${C_BOLD}    INSTALLATION COMPLETE! YOU CAN REBOOT NOW         ${C_RESET}"
+echo -e "${C_GREEN}======================================================${C_RESET}"
