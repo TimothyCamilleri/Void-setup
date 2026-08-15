@@ -167,7 +167,7 @@ echo -e "${C_MAGENTA}======================================================${C_R
 XBPS_ARCH=x86_64 xbps-install -Sy -R https://repo-default.voidlinux.org/current -r /mnt \
   base-system xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip ca-certificates sudo \
-  elogind polkitd Roboto-fonts jetbrains-mono
+  elogind polkit Roboto-fonts jetbrains-mono
 
 # 7. System Setup
 clear
@@ -213,10 +213,9 @@ echo "$USERNAME:$USER_PASS" | chpasswd
 echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
 chmod 0440 /etc/sudoers.d/wheel
 
-# Enable runit services
+# Enable runit services (polkit runs automatically via dbus)
 ln -s /etc/sv/dbus /etc/runit/runsvdir/default/
 ln -s /etc/sv/elogind /etc/runit/runsvdir/default/
-ln -s /etc/sv/polkitd /etc/runit/runsvdir/default/
 ln -s /etc/sv/lightdm /etc/runit/runsvdir/default/
 ln -s /etc/sv/NetworkManager /etc/runit/runsvdir/default/
 
