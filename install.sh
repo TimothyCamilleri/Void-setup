@@ -84,7 +84,7 @@ mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
 
 echo "==> [4/7] Installing Base System, Desktop, Fonts, and Apps..."
-XBPS_ARCH=$(uname -m) xbps-install -Sy -R https://repo-default.voidlinux.org/current -r /mnt \
+XBPS_ARCH=x86_64 xbps-install -Sy -R https://repo-default.voidlinux.org/current -r /mnt \
   base-system xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip ca-certificates sudo \
   elogind polkitd Roboto-fonts jetbrains-mono
@@ -101,11 +101,17 @@ UUID=$UUID_EFI /boot/efi vfat defaults 0 2
 UUID=$UUID_SWAP swap swap defaults 0 0
 EOF
 
-# Copy DNS config so network works inside xchroot
+# Copy DNS config so network works inside chroot
 cp /etc/resolv.conf /mnt/etc/resolv.conf
 
 echo "==> [6/7] Configuring System, User, Services, and Dotfiles..."
-xchroot /mnt /bin/bash <<EOF
+
+# Bind essential API filesystems for GRUB EFI access
+for sysfs in /dev /proc /sys /run; do
+    mount --bind "$sysfs" "/mnt$sysfs"
+done
+
+chroot /mnt /bin/bash <<EOF
 # Set Passwords
 echo "root:$ROOT_PASS" | chpasswd
 useradd -m -G wheel,audio,video,input,storage -s /bin/bash "$USERNAME"
@@ -126,6 +132,9 @@ ln -s /etc/sv/NetworkManager /etc/runit/runsvdir/default/
 USER_HOME="/home/$USERNAME"
 mkdir -p "\$USER_HOME/.config" "\$USER_HOME/.themes" "\$USER_HOME/.icons"
 
+# Enable dotglob so hidden files are included in wildcards
+shopt -s dotglob
+
 # Clone dotfiles
 rm -rf "\$USER_HOME/dotties_temp"
 git clone --depth 1 https://github.com/mehedirm6244/My_XFCE_dotties.git "\$USER_HOME/dotties_temp"
@@ -143,8 +152,14 @@ if [ -d "\$SRC_DIR" ]; then
     rm -rf "\$USER_HOME/dotties_temp"
 fi
 
+# Disable dotglob back to default
+shopt -u dotglob
+
 # Fix ownership permissions for the user
 chown -R "$USERNAME:$USERNAME" "\$USER_HOME"
+
+# Re-generate initramfs images explicitly before GRUB installation
+dracut --regenerate-all --force
 
 # Install GRUB bootloader
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void"
@@ -152,6 +167,12 @@ update-grub
 EOF
 
 echo "==> [7/7] Unmounting partitions..."
+# Safely unmount bound virtual filesystems
+umount -l /mnt/dev || true
+umount -l /mnt/proc || true
+umount -l /mnt/sys || true
+umount -l /mnt/run || true
+
 swapoff "$PART_SWAP"
 umount -R /mnt
 
