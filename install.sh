@@ -27,6 +27,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Clear screen & Check Root
 clear
 if [ "$(id -u)" -ne 0 ]; then
   echo -e "${C_RED}Error: Please run this script with sudo or as root!${C_RESET}"
@@ -44,13 +45,26 @@ if ! ping -c 1 -W 3 repo-default.voidlinux.org >/dev/null 2>&1; then
     echo -e "${C_RED}Please configure your network before running this script.${C_RESET}"
     exit 1
 fi
-echo -e "${C_GREEN}Network OK.${C_RESET}\n"
+echo -e "${C_GREEN}Network OK.${C_RESET}"
+sleep 1
 
-# 1. Select Target Drive
-echo -e "${C_YELLOW}Available Storage Drives:${C_RESET}"
-lsblk -d -n -o NAME,SIZE,TYPE,MODEL | grep -E "disk"
-echo ""
-read -p "$(echo -e ${C_BOLD}"Enter target disk name (e.g., sda, nvme0n1): "${C_RESET})" DISK_NAME
+# 1. Multi-Drive Identification & Target Selection
+clear
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo -e "${C_CYAN}${C_BOLD}         STEP 1: SELECT TARGET STORAGE DRIVE          ${C_RESET}"
+echo -e "${C_CYAN}======================================================${C_RESET}\n"
+
+lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINTS | grep -E "disk|part"
+echo -e "\n${C_YELLOW}------------------------------------------------------${C_RESET}"
+
+# Identify active live media to warn user
+LIVE_DRIVE=$(lsblk -no PKNAME $(df / | tail -n1 | awk '{print $1}') 2>/dev/null || true)
+if [ -n "$LIVE_DRIVE" ]; then
+    echo -e "${C_RED}${C_BOLD}NOTE:${C_RESET} Your active Live USB appears to be on ${C_RED}/dev/${LIVE_DRIVE}${C_RESET}."
+    echo -e "${C_RED}      DO NOT select ${LIVE_DRIVE} as your target drive!${C_RESET}\n"
+fi
+
+read -p "$(echo -e ${C_BOLD}"Enter target disk name to install Void onto (e.g., sda, sdb, nvme0n1): "${C_RESET})" DISK_NAME
 DISK="/dev/${DISK_NAME}"
 
 if [ ! -b "$DISK" ]; then
@@ -61,7 +75,7 @@ fi
 # Ensure drive isn't actively mounted
 if grep -qs "$DISK" /proc/mounts; then
     echo -e "${C_RED}Error: Disk $DISK or one of its partitions is currently mounted!${C_RESET}"
-    echo -e "${C_RED}Unmount the drive and run the script again.${C_RESET}"
+    echo -e "${C_RED}Unmount the drive/partitions and run the script again.${C_RESET}"
     exit 1
 fi
 
@@ -77,13 +91,17 @@ else
 fi
 
 # 2. Gather User Inputs
-echo ""
+clear
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo -e "${C_CYAN}${C_BOLD}         STEP 2: SYSTEM & USER CONFIGURATION          ${C_RESET}"
+echo -e "${C_CYAN}======================================================${C_RESET}\n"
+
 read -p "$(echo -e ${C_BOLD}"Enter Swap size in GB (e.g., 2, 4, 8): "${C_RESET})" SWAP_SIZE
 read -p "$(echo -e ${C_BOLD}"Enter your desired Username: "${C_RESET})" USERNAME
 read -sp "$(echo -e ${C_BOLD}"Enter Password for $USERNAME: "${C_RESET})" USER_PASS
 echo ""
 read -sp "$(echo -e ${C_BOLD}"Enter Root Password: "${C_RESET})" ROOT_PASS
-echo -e "\n"
+echo ""
 
 # Verify inputs aren't empty
 if [ -z "$USERNAME" ] || [ -z "$USER_PASS" ] || [ -z "$ROOT_PASS" ] || [ -z "$SWAP_SIZE" ]; then
@@ -91,9 +109,11 @@ if [ -z "$USERNAME" ] || [ -z "$USER_PASS" ] || [ -z "$ROOT_PASS" ] || [ -z "$SW
     exit 1
 fi
 
-# 3. Confirmation Warning
-echo -e "${C_RED}------------------------------------------------------${C_RESET}"
-echo -e "${C_RED}${C_BOLD} WARNING: ALL DATA ON $DISK WILL BE DELETED!${C_RESET}"
+# Confirmation Screen
+clear
+echo -e "${C_RED}======================================================${C_RESET}"
+echo -e "${C_RED}${C_BOLD}  WARNING: ALL DATA ON $DISK WILL BE PERMANENTLY ERASED!${C_RESET}"
+echo -e "${C_RED}======================================================${C_RESET}\n"
 echo -e "${C_YELLOW} Target Disk:     ${C_RESET}${C_BOLD}$DISK${C_RESET}"
 echo -e "${C_YELLOW} EFI Partition:   ${C_RESET}$PART_EFI (512MB)"
 echo -e "${C_YELLOW} Swap Partition:  ${C_RESET}$PART_SWAP (${SWAP_SIZE}GB)"
@@ -101,14 +121,18 @@ echo -e "${C_YELLOW} Root Partition:  ${C_RESET}$PART_ROOT (Remaining Space)"
 echo -e "${C_YELLOW} Username:        ${C_RESET}$USERNAME"
 echo -e "${C_YELLOW} Custom Dotfiles: ${C_RESET}https://github.com/mehedirm6244/My_XFCE_dotties"
 echo -e "${C_RED}------------------------------------------------------${C_RESET}"
-read -p "$(echo -e ${C_RED}${C_BOLD}"Type 'YES' to start installation: "${C_RESET})" CONFIRM
+read -p "$(echo -e ${C_RED}${C_BOLD}"Type 'YES' to wipe $DISK and begin: "${C_RESET})" CONFIRM
 
 if [ "$CONFIRM" != "YES" ]; then
     echo -e "${C_YELLOW}Installation canceled.${C_RESET}"
     exit 1
 fi
 
-echo -e "\n${C_MAGENTA}==> [1/7] Wiping and Partitioning $DISK (GPT)...${C_RESET}"
+# 3. Partitioning
+clear
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [1/7] Wiping and Partitioning $DISK (GPT)...          ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 sfdisk "$DISK" <<EOF
 label: gpt
 size=512M, type=U, name="EFI"
@@ -116,24 +140,40 @@ size=${SWAP_SIZE}G, type=S, name="SWAP"
 size=+, type=L, name="ROOT"
 EOF
 
-echo -e "${C_MAGENTA}==> [2/7] Formatting partitions...${C_RESET}"
+# 4. Formatting
+clear
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [2/7] Formatting partitions...                        ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 mkfs.vfat -F32 "$PART_EFI"
 mkswap "$PART_SWAP"
 mkfs.ext4 -F "$PART_ROOT"
 
-echo -e "${C_MAGENTA}==> [3/7] Mounting filesystems...${C_RESET}"
+# 5. Mounting
+clear
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems...                         ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 mount "$PART_ROOT" /mnt
 mkdir -p /mnt/boot/efi
 mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
 
-echo -e "${C_MAGENTA}==> [4/7] Installing Base System, Desktop, Fonts, and Apps...${C_RESET}"
+# 6. Installing Packages
+clear
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [4/7] Installing Base System, Desktop, & Apps...     ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 XBPS_ARCH=x86_64 xbps-install -Sy -R https://repo-default.voidlinux.org/current -r /mnt \
   base-system xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip ca-certificates sudo \
   elogind polkitd Roboto-fonts jetbrains-mono
 
-echo -e "${C_MAGENTA}==> [5/7] Generating /etc/fstab and DNS settings...${C_RESET}"
+# 7. System Setup
+clear
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [5/7] Generating /etc/fstab and DNS settings...       ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 mkdir -p /mnt/etc
 UUID_ROOT=$(blkid -s UUID -o value "$PART_ROOT")
 UUID_EFI=$(blkid -s UUID -o value "$PART_EFI")
@@ -147,7 +187,11 @@ EOF
 
 cp /etc/resolv.conf /mnt/etc/resolv.conf
 
-echo -e "${C_MAGENTA}==> [6/7] Configuring System, User, Services, and Dotfiles...${C_RESET}"
+# 8. Chroot Configuration
+clear
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [6/7] Configuring System, User, Services, & Dotfiles..${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 
 # Bind API filesystems for chroot EFI & device access
 for sysfs in /dev /proc /sys /run; do
@@ -207,7 +251,11 @@ grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void
 update-grub
 EOF
 
-echo -e "${C_MAGENTA}==> [7/7] Unmounting partitions cleanly...${C_RESET}"
+# 9. Clean Unmount
+clear
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [7/7] Unmounting partitions cleanly...               ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 umount -l /mnt/dev || true
 umount -l /mnt/proc || true
 umount -l /mnt/sys || true
@@ -219,6 +267,8 @@ umount -R /mnt
 # Disable trap after successful completion
 trap - EXIT
 
+# Final Success Banner
+clear
 echo -e "\n${C_GREEN}======================================================${C_RESET}"
 echo -e "${C_GREEN}${C_BOLD}    INSTALLATION COMPLETE! YOU CAN REBOOT NOW         ${C_RESET}"
-echo -e "${C_GREEN}======================================================${C_RESET}"
+echo -e "${C_GREEN}======================================================${C_RESET}\n"
