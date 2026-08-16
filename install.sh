@@ -47,14 +47,18 @@ echo -e "${C_CYAN}======================================================${C_RESE
 echo -e "${C_CYAN}${C_BOLD}   AUTOMATED VOID LINUX + CUSTOM XFCE RICE INSTALLER  ${C_RESET}"
 echo -e "${C_CYAN}======================================================${C_RESET}\n"
 
-# Pre-flight Check: Internet Connection
-echo -e "${C_MAGENTA}==> Verifying network connectivity...${C_RESET}"
+# Pre-flight Check: Internet Connection & SSL Time Sync (Fixes XBPS segfaults)
+echo -e "${C_MAGENTA}==> Verifying network connectivity & syncing system time...${C_RESET}"
 if ! ping -c 1 -W 3 repo-default.voidlinux.org >/dev/null 2>&1; then
     echo -e "${C_RED}Error: No internet connection detected or mirror is unreachable.${C_RESET}"
     echo -e "${C_RED}Please configure your network before running this script.${C_RESET}"
     exit 1
 fi
-echo -e "${C_GREEN}Network OK.${C_RESET}"
+
+# Sync system time to prevent OpenSSL segfaults inside XBPS
+ulimit -n 4096 2>/dev/null || true
+chronyd -q 'server pool.ntp.org iburst' 2>/dev/null || ntpdate pool.ntp.org 2>/dev/null || true
+echo -e "${C_GREEN}Network & Time Sync OK.${C_RESET}"
 sleep 1
 
 # 1. Multi-Drive Identification & Target Selection
@@ -160,21 +164,22 @@ mkfs.vfat -F32 "$PART_EFI"
 mkswap "$PART_SWAP"
 mkfs.ext4 -F "$PART_ROOT"
 
-# 5. Mounting & DNS Copy
+# 5. Mounting & Setup Target XBPS Environment
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & setup DNS...             ${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & preparing target...       ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 mount "$PART_ROOT" /mnt
 mkdir -p /mnt/boot/efi
 mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
 
+# Prepare Target Configuration
 mkdir -p /mnt/etc /mnt/var/db/xbps/keys
 cp -L /etc/resolv.conf /mnt/etc/
 cp -a /var/db/xbps/keys/* /mnt/var/db/xbps/keys/ 2>/dev/null || true
 
-# 6. Installing Repositories & Base Packages
+# 6. Synchronizing Repositories & Installing Base
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
 echo -e "${C_MAGENTA}${C_BOLD} [4/7] Synchronizing Repositories & Installing Base... ${C_RESET}"
@@ -182,20 +187,20 @@ echo -e "${C_MAGENTA}======================================================${C_R
 
 REPO_URL="https://repo-default.voidlinux.org/current"
 
-# Update host certificates to eliminate SSL validation bugs
-xbps-install -Sy ca-certificates || true
+# Synchronize local keys & package indices first
+xbps-install -S
 
-# Bootstrapping base-system directly to target directory /mnt
+# Booststrap base system safely step-by-step
 xbps-install -Sy -R "$REPO_URL" -r /mnt base-system
 
-# Install Nonfree & Multilib repository extension packages
+# Install repository extensions
 xbps-install -y -R "$REPO_URL" -r /mnt \
   void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
 
-# Resync target repository database with nonfree enabled
+# Update repository state inside chroot environment
 xbps-install -Sy -r /mnt
 
-# Install core system, desktop environment, fonts, and utilities
+# Install Desktop Environment & tools
 xbps-install -y -r /mnt \
   xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip sudo \
