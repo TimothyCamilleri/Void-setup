@@ -1,10 +1,20 @@
 #!/bin/bash
-set -eo pipefail
+set -Eeuo pipefail
 
-# Export XBPS target architecture globally
+# ============================================================
+# VOID LINUX AUTOMATED XFCE INSTALLER
+# x86_64 / glibc / UEFI / GPT
+#
+# WARNING:
+# This script completely erases the selected target disk.
+# ============================================================
+
 export XBPS_ARCH="x86_64"
 
-# Define ANSI Color Codes
+# ------------------------------------------------------------
+# COLORS
+# ------------------------------------------------------------
+
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
 C_RED="\033[1;31m"
@@ -13,335 +23,944 @@ C_YELLOW="\033[1;33m"
 C_CYAN="\033[1;36m"
 C_MAGENTA="\033[1;35m"
 
-pause_step() {
-    echo -e "\n${C_YELLOW}--> Press [ENTER] to continue...${C_RESET}"
+# ------------------------------------------------------------
+# VARIABLES
+# ------------------------------------------------------------
+
+DISK=""
+PART_EFI=""
+PART_SWAP=""
+PART_ROOT=""
+
+SWAP_SIZE=""
+USERNAME=""
+USER_PASS=""
+ROOT_PASS=""
+
+REPO_URL=""
+
+# ------------------------------------------------------------
+# FUNCTIONS
+# ------------------------------------------------------------
+
+error_exit()
+{
+    echo
+    echo -e "${C_RED}======================================================${C_RESET}"
+    echo -e "${C_RED} ERROR: $1${C_RESET}"
+    echo -e "${C_RED}======================================================${C_RESET}"
+    echo
+    exit 1
+}
+
+pause_step()
+{
+    echo
+    echo -e "${C_YELLOW}--> Press [ENTER] to continue...${C_RESET}"
     read -r
 }
 
-safe_umount() {
-    swapoff -a 2>/dev/null || true
-    umount -l /mnt/dev 2>/dev/null || true
-    umount -l /mnt/proc 2>/dev/null || true
-    umount -l /mnt/sys 2>/dev/null || true
-    umount -l /mnt/run 2>/dev/null || true
+cleanup_mounts()
+{
+    echo -e "${C_YELLOW}Cleaning up mounted filesystems...${C_RESET}"
+
+    swapoff "$PART_SWAP" 2>/dev/null || true
+
+    if mountpoint -q /mnt/boot/efi 2>/dev/null; then
+        umount -R /mnt/boot/efi 2>/dev/null || true
+    fi
+
+    umount -R /mnt/dev 2>/dev/null || true
+    umount -R /mnt/proc 2>/dev/null || true
+    umount -R /mnt/sys 2>/dev/null || true
+    umount -R /mnt/run 2>/dev/null || true
+
     umount -R /mnt 2>/dev/null || true
 }
 
-cleanup() {
+on_error()
+{
     local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        echo -e "\n${C_RED}======================================================${C_RESET}"
-        echo -e "${C_RED} ERROR OCCURRED! Cleaning up mounted filesystems...  ${C_RESET}"
+
+    if [ "$exit_code" -ne 0 ]; then
+        echo
         echo -e "${C_RED}======================================================${C_RESET}"
-        safe_umount
+        echo -e "${C_RED} INSTALLATION FAILED${C_RESET}"
+        echo -e "${C_RED} Cleaning up...${C_RESET}"
+        echo -e "${C_RED}======================================================${C_RESET}"
+
+        cleanup_mounts
+
+        echo
+        echo -e "${C_RED}The installer stopped because an error occurred.${C_RESET}"
+        echo -e "${C_YELLOW}Exit code: $exit_code${C_RESET}"
     fi
 }
-trap cleanup EXIT
+
+trap on_error ERR
+
+# ------------------------------------------------------------
+# ROOT CHECK
+# ------------------------------------------------------------
 
 clear
+
 if [ "$(id -u)" -ne 0 ]; then
-  echo -e "${C_RED}Error: Please run this script with sudo or as root!${C_RESET}"
-  exit 1
+    error_exit "Run this script as root."
 fi
 
-echo -e "${C_CYAN}======================================================${C_RESET}"
-echo -e "${C_CYAN}${C_BOLD}   AUTOMATED VOID LINUX + CUSTOM XFCE RICE INSTALLER  ${C_RESET}"
-echo -e "${C_CYAN}======================================================${C_RESET}\n"
+# ------------------------------------------------------------
+# UEFI CHECK
+# ------------------------------------------------------------
 
-# Pre-flight Check: Internet Connection & SSL Time Sync
-echo -e "${C_MAGENTA}==> Verifying network connectivity & syncing system time...${C_RESET}"
+if [ ! -d /sys/firmware/efi ]; then
+    error_exit "This computer was not booted in UEFI mode.
+
+Reboot the Void Linux USB in UEFI mode and run the script again."
+fi
+
+# ------------------------------------------------------------
+# HEADER
+# ------------------------------------------------------------
+
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo -e "${C_CYAN}${C_BOLD}       AUTOMATED VOID LINUX XFCE INSTALLER            ${C_RESET}"
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo
+echo -e "${C_YELLOW}Target:${C_RESET} x86_64 / glibc / UEFI / GPT"
+echo -e "${C_YELLOW}Desktop:${C_RESET} XFCE"
+echo -e "${C_YELLOW}Bootloader:${C_RESET} GRUB"
+echo
+
+pause_step
+
+# ------------------------------------------------------------
+# NETWORK CHECK
+# ------------------------------------------------------------
+
+clear
+
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD}             CHECKING INTERNET CONNECTION             ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo
+
 if ! ping -c 1 -W 3 repo-default.voidlinux.org >/dev/null 2>&1; then
+
     if ! ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1; then
-        echo -e "${C_RED}Error: No internet connection detected.${C_RESET}"
-        exit 1
+        error_exit "No internet connection detected."
     fi
 fi
 
-# Fix system time to prevent OpenSSL signature errors during xbps-install
-ulimit -n 4096 2>/dev/null || true
-chronyd -q 'server pool.ntp.org iburst' 2>/dev/null || ntpdate pool.ntp.org 2>/dev/null || true
-echo -e "${C_GREEN}Network & Time Sync OK.${C_RESET}"
-sleep 1
+echo -e "${C_GREEN}Internet connection OK.${C_RESET}"
 
-# 1. Drive Selection
-clear
-echo -e "${C_CYAN}======================================================${C_RESET}"
-echo -e "${C_CYAN}${C_BOLD}         STEP 1: SELECT TARGET STORAGE DRIVE          ${C_RESET}"
-echo -e "${C_CYAN}======================================================${C_RESET}\n"
+# ------------------------------------------------------------
+# TIME SYNCHRONIZATION
+# ------------------------------------------------------------
 
-lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINTS | grep -E "disk|part"
-echo -e "\n${C_YELLOW}------------------------------------------------------${C_RESET}"
+echo
+echo -e "${C_YELLOW}Synchronizing system clock...${C_RESET}"
 
-LIVE_DRIVE=$(lsblk -no PKNAME $(df / | tail -n1 | awk '{print $1}') 2>/dev/null || true)
-if [ -n "$LIVE_DRIVE" ]; then
-    echo -e "${C_RED}${C_BOLD}NOTE:${C_RESET} Active Live USB is on ${C_RED}/dev/${LIVE_DRIVE}${C_RESET}."
-    echo -e "${C_RED}      DO NOT select ${LIVE_DRIVE} as your target drive!${C_RESET}\n"
+if command -v chronyd >/dev/null 2>&1; then
+    chronyd -q 'server pool.ntp.org iburst' 2>/dev/null || true
+elif command -v ntpd >/dev/null 2>&1; then
+    ntpd -qg 2>/dev/null || true
 fi
 
-read -p "$(echo -e ${C_BOLD}"Enter target disk name (e.g., sda, nvme0n1): "${C_RESET})" DISK_NAME
+echo -e "${C_GREEN}Clock synchronization attempted.${C_RESET}"
+
+sleep 1
+
+# ------------------------------------------------------------
+# DRIVE SELECTION
+# ------------------------------------------------------------
+
+clear
+
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo -e "${C_CYAN}${C_BOLD}              STEP 1: SELECT TARGET DISK             ${C_RESET}"
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo
+
+lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINTS
+
+echo
+echo -e "${C_YELLOW}------------------------------------------------------${C_RESET}"
+echo
+
+read -r -p "Enter target disk name (example: sda or nvme0n1): " DISK_NAME
+
 DISK="/dev/${DISK_NAME}"
 
 if [ ! -b "$DISK" ]; then
-    echo -e "${C_RED}Error: Device $DISK does not exist!${C_RESET}"
-    exit 1
+    error_exit "Device $DISK does not exist."
 fi
 
-safe_umount
+# ------------------------------------------------------------
+# DETECT LIVE USB
+# ------------------------------------------------------------
+
+LIVE_DRIVE=""
+
+ROOT_SOURCE=$(findmnt -n -o SOURCE / 2>/dev/null || true)
+
+if [ -n "$ROOT_SOURCE" ]; then
+
+    LIVE_DRIVE=$(lsblk -no PKNAME "$ROOT_SOURCE" 2>/dev/null || true)
+
+fi
+
+if [ -n "$LIVE_DRIVE" ]; then
+
+    echo
+    echo -e "${C_RED}${C_BOLD}WARNING:${C_RESET}"
+    echo -e "The live system appears to be running from:"
+    echo -e "${C_RED}/dev/${LIVE_DRIVE}${C_RESET}"
+    echo
+
+    if [ "$DISK_NAME" = "$LIVE_DRIVE" ]; then
+        error_exit "You selected the disk containing the live system."
+    fi
+fi
+
+# ------------------------------------------------------------
+# PARTITION NAMES
+# ------------------------------------------------------------
 
 if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
+
     PART_EFI="${DISK}p1"
     PART_SWAP="${DISK}p2"
     PART_ROOT="${DISK}p3"
+
 else
+
     PART_EFI="${DISK}1"
     PART_SWAP="${DISK}2"
     PART_ROOT="${DISK}3"
+
 fi
 
-# 2. Gather User Inputs
+# ------------------------------------------------------------
+# USER CONFIGURATION
+# ------------------------------------------------------------
+
 clear
+
 echo -e "${C_CYAN}======================================================${C_RESET}"
-echo -e "${C_CYAN}${C_BOLD}         STEP 2: SYSTEM & USER CONFIGURATION          ${C_RESET}"
-echo -e "${C_CYAN}======================================================${C_RESET}\n"
+echo -e "${C_CYAN}${C_BOLD}         STEP 2: SYSTEM CONFIGURATION                ${C_RESET}"
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo
 
-read -p "$(echo -e ${C_BOLD}"Enter Swap size in GB (e.g., 2, 4, 8): "${C_RESET})" SWAP_SIZE
-read -p "$(echo -e ${C_BOLD}"Enter Username: "${C_RESET})" USERNAME
-read -p "$(echo -e ${C_BOLD}"Enter Password for $USERNAME: "${C_RESET})" USER_PASS
-read -p "$(echo -e ${C_BOLD}"Enter Root Password: "${C_RESET})" ROOT_PASS
+read -r -p "Swap size in GB [4]: " SWAP_SIZE
 
-if [ -z "$USERNAME" ] || [ -z "$USER_PASS" ] || [ -z "$ROOT_PASS" ] || [ -z "$SWAP_SIZE" ]; then
-    echo -e "${C_RED}Error: All input fields are required.${C_RESET}"
-    exit 1
+SWAP_SIZE="${SWAP_SIZE:-4}"
+
+if ! [[ "$SWAP_SIZE" =~ ^[0-9]+$ ]]; then
+    error_exit "Swap size must be a whole number."
 fi
 
+read -r -p "Username: " USERNAME
+
+if [ -z "$USERNAME" ]; then
+    error_exit "Username cannot be empty."
+fi
+
+if ! [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+    error_exit "Invalid username."
+fi
+
+read -r -s -p "Password for $USERNAME: " USER_PASS
+echo
+
+if [ -z "$USER_PASS" ]; then
+    error_exit "User password cannot be empty."
+fi
+
+read -r -s -p "Root password: " ROOT_PASS
+echo
+
+if [ -z "$ROOT_PASS" ]; then
+    error_exit "Root password cannot be empty."
+fi
+
+# ------------------------------------------------------------
+# REPOSITORY SELECTION
+# ------------------------------------------------------------
+
 clear
+
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo -e "${C_CYAN}${C_BOLD}            SELECT VOID LINUX MIRROR                 ${C_RESET}"
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo
+
+echo "1) Default / Global"
+echo "2) Germany / Europe"
+echo "3) USA / Kansas"
+echo "4) Custom"
+echo
+
+read -r -p "Select mirror [1-4] (default: 1): " REPO_CHOICE
+
+case "$REPO_CHOICE" in
+
+    2)
+        REPO_URL="https://alpha.de.repo.voidlinux.org/current"
+        ;;
+
+    3)
+        REPO_URL="https://a.repo.voidlinux.org/current"
+        ;;
+
+    4)
+        read -r -p "Enter repository URL: " REPO_URL
+
+        if [ -z "$REPO_URL" ]; then
+            REPO_URL="https://repo-default.voidlinux.org/current"
+        fi
+        ;;
+
+    *)
+        REPO_URL="https://repo-default.voidlinux.org/current"
+        ;;
+
+esac
+
+echo
+echo -e "${C_GREEN}Using repository:${C_RESET}"
+echo "$REPO_URL"
+
+sleep 2
+
+# ------------------------------------------------------------
+# FINAL WARNING
+# ------------------------------------------------------------
+
+clear
+
 echo -e "${C_RED}======================================================${C_RESET}"
-echo -e "${C_RED}${C_BOLD}  WARNING: ALL DATA ON $DISK WILL BE PERMANENTLY ERASED!${C_RESET}"
-echo -e "${C_RED}======================================================${C_RESET}\n"
-echo -e "${C_YELLOW} Target Disk:     ${C_RESET}${C_BOLD}$DISK${C_RESET}"
-echo -e "${C_YELLOW} EFI Partition:   ${C_RESET}$PART_EFI (512MB)"
-echo -e "${C_YELLOW} Swap Partition:  ${C_RESET}$PART_SWAP (${SWAP_SIZE}GB)"
-echo -e "${C_YELLOW} Root Partition:  ${C_RESET}$PART_ROOT (Remaining Space)"
-echo -e "${C_YELLOW} Username:        ${C_RESET}$USERNAME"
-echo -e "${C_RED}------------------------------------------------------${C_RESET}"
-read -p "$(echo -e ${C_RED}${C_BOLD}"Type 'YES' to wipe $DISK and begin: "${C_RESET})" CONFIRM
+echo -e "${C_RED}${C_BOLD}                 !!! WARNING !!!                     ${C_RESET}"
+echo -e "${C_RED}======================================================${C_RESET}"
+echo
+echo -e "${C_RED}${C_BOLD}ALL DATA ON THIS DISK WILL BE DESTROYED.${C_RESET}"
+echo
+echo -e "${C_YELLOW}Target disk:${C_RESET} $DISK"
+echo
+echo -e "${C_YELLOW}Partitions:${C_RESET}"
+echo "  $PART_EFI  -> EFI     512 MB"
+echo "  $PART_SWAP -> SWAP    ${SWAP_SIZE} GB"
+echo "  $PART_ROOT -> ROOT    Remaining space"
+echo
+echo -e "${C_YELLOW}Username:${C_RESET} $USERNAME"
+echo -e "${C_YELLOW}Repository:${C_RESET} $REPO_URL"
+echo
+echo -e "${C_RED}======================================================${C_RESET}"
+echo
+
+read -r -p "Type YES to completely erase $DISK: " CONFIRM
 
 if [ "$CONFIRM" != "YES" ]; then
-    echo -e "${C_YELLOW}Installation canceled.${C_RESET}"
-    exit 1
+    echo -e "${C_YELLOW}Installation cancelled.${C_RESET}"
+    exit 0
 fi
 
-# 3. Partitioning
+# ------------------------------------------------------------
+# UNMOUNT EXISTING TARGET
+# ------------------------------------------------------------
+
+echo
+echo -e "${C_YELLOW}Unmounting existing filesystems...${C_RESET}"
+
+umount -R /mnt 2>/dev/null || true
+
+swapoff "$PART_SWAP" 2>/dev/null || true
+
+# ------------------------------------------------------------
+# PARTITION DISK
+# ------------------------------------------------------------
+
 clear
+
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [1/7] Wiping and Partitioning $DISK...                ${C_RESET}"
-echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
+echo -e "${C_MAGENTA}${C_BOLD}             [1/7] PARTITIONING DISK                 ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo
 
-wipefs -af "$DISK" 2>/dev/null || true
+echo -e "${C_YELLOW}Wiping old filesystem signatures...${C_RESET}"
 
-sfdisk "$DISK" <<EOF
+wipefs -af "$DISK"
+
+echo -e "${C_YELLOW}Creating GPT partition table...${C_RESET}"
+
+sfdisk --wipe always "$DISK" <<EOF
 label: gpt
 size=512M, type=U, name="EFI"
 size=${SWAP_SIZE}G, type=S, name="SWAP"
 size=+, type=L, name="ROOT"
 EOF
 
-blockdev --rereadpt "$DISK" 2>/dev/null || true
-udevadm trigger --subsystem-match=block 2>/dev/null || true
-udevadm settle 2>/dev/null || true
+partprobe "$DISK" 2>/dev/null || true
 
-for part in "$PART_EFI" "$PART_SWAP" "$PART_ROOT"; do
-    count=0
-    while [ ! -b "$part" ]; do
-        sleep 0.5
-        count=$((count+1))
-        if [ $count -gt 10 ]; then
-            echo -e "${C_RED}Error: Partition $part not found.${C_RESET}"
-            exit 1
+udevadm settle
+
+sleep 2
+
+# ------------------------------------------------------------
+# CHECK PARTITIONS
+# ------------------------------------------------------------
+
+for PART in "$PART_EFI" "$PART_SWAP" "$PART_ROOT"; do
+
+    COUNT=0
+
+    while [ ! -b "$PART" ]; do
+
+        sleep 1
+
+        COUNT=$((COUNT + 1))
+
+        if [ "$COUNT" -ge 10 ]; then
+            error_exit "Partition $PART was not detected."
         fi
+
     done
+
 done
 
-# 4. Formatting
-clear
-echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [2/7] Formatting partitions...                        ${C_RESET}"
-echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
+echo
+echo -e "${C_GREEN}Partitions created successfully.${C_RESET}"
 
-safe_umount
+lsblk "$DISK"
+
+pause_step
+
+# ------------------------------------------------------------
+# FORMAT
+# ------------------------------------------------------------
+
+clear
+
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD}             [2/7] FORMATTING DISK                   ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo
+
+echo -e "${C_YELLOW}Formatting EFI partition...${C_RESET}"
 
 mkfs.vfat -F32 "$PART_EFI"
+
+echo -e "${C_YELLOW}Creating swap...${C_RESET}"
+
 mkswap -f "$PART_SWAP"
+
+echo -e "${C_YELLOW}Formatting root filesystem...${C_RESET}"
+
 mkfs.ext4 -F "$PART_ROOT"
 
-# 5. Mounting & Directory Setup
+echo
+echo -e "${C_GREEN}Formatting complete.${C_RESET}"
+
+# ------------------------------------------------------------
+# MOUNT
+# ------------------------------------------------------------
+
 clear
+
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & bootstrapping directories...${C_RESET}"
-echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
+echo -e "${C_MAGENTA}${C_BOLD}          [3/7] MOUNTING FILESYSTEMS                 ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo
 
 mkdir -p /mnt
+
 mount "$PART_ROOT" /mnt
 
 mkdir -p /mnt/boot/efi
-mkdir -p /mnt/etc
 
 mount "$PART_EFI" /mnt/boot/efi
+
 swapon "$PART_SWAP"
 
-# Populate DNS resolve configuration
-cp -L /etc/resolv.conf /mnt/etc/ 2>/dev/null || true
+echo -e "${C_GREEN}Root mounted at /mnt.${C_RESET}"
+echo -e "${C_GREEN}EFI mounted at /mnt/boot/efi.${C_RESET}"
+echo -e "${C_GREEN}Swap enabled.${C_RESET}"
 
-echo -e "${C_GREEN}Mounts and bootstrapping initializations complete.${C_RESET}"
-sleep 1
+# ------------------------------------------------------------
+# DNS
+# ------------------------------------------------------------
 
-# 6. Repository Selector & Package Bootstrap (Official Pattern)
-clear
-echo -e "${C_CYAN}======================================================${C_RESET}"
-echo -e "${C_CYAN}${C_BOLD}        SELECT VOID LINUX REPOSITORY MIRROR           ${C_RESET}"
-echo -e "${C_CYAN}======================================================${C_RESET}\n"
+echo
+echo -e "${C_YELLOW}Configuring DNS...${C_RESET}"
 
-echo "1) Global / Default  (https://repo-default.voidlinux.org/current)"
-echo "2) Europe / Germany  (https://alpha.de.repo.voidlinux.org/current)"
-echo "3) USA / Kansas      (https://a.repo.voidlinux.org/current)"
-echo "4) Custom Mirror URL"
-echo ""
-read -p "Select a repository mirror [1-4] (Default: 1): " REPO_CHOICE
+if [ -f /etc/resolv.conf ]; then
+    cp -L /etc/resolv.conf /mnt/etc/resolv.conf 2>/dev/null || true
+fi
 
-case "$REPO_CHOICE" in
-    2)
-        REPO_URL="https://alpha.de.repo.voidlinux.org/current"
-        ;;
-    3)
-        REPO_URL="https://a.repo.voidlinux.org/current"
-        ;;
-    4)
-        read -p "Enter custom repository URL: " REPO_URL
-        if [ -z "$REPO_URL" ]; then
-            echo -e "${C_RED}No URL entered. Falling back to default mirror.${C_RESET}"
-            REPO_URL="https://repo-default.voidlinux.org/current"
-        fi
-        ;;
-    *)
-        REPO_URL="https://repo-default.voidlinux.org/current"
-        ;;
-esac
+# Fallback DNS
+if [ ! -s /mnt/etc/resolv.conf ]; then
 
-echo -e "\n${C_GREEN}Using repository: $REPO_URL${C_RESET}\n"
-sleep 1
+    cat > /mnt/etc/resolv.conf <<EOF
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
 
-clear
-echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [4/7] Synchronizing Repositories & Installing Base... ${C_RESET}"
-echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
+fi
 
-# 1. Clear target keys and duplicate host XBPS RSA signing keys
+# ------------------------------------------------------------
+# COPY XBPS KEYS
+# ------------------------------------------------------------
+
+echo
+echo -e "${C_YELLOW}Copying Void XBPS signing keys...${C_RESET}"
+
 mkdir -p /mnt/var/db/xbps/keys
+
 cp -a /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
 
-# 2. Synchronize XBPS repo database on host and target explicitly
-XBPS_ARCH="x86_64" xbps-install -S -R "$REPO_URL"
-XBPS_ARCH="x86_64" xbps-install -S -R "$REPO_URL" -r /mnt
+# ------------------------------------------------------------
+# BOOTSTRAP VOID
+# ------------------------------------------------------------
 
-# 3. Bootstrap Root SSL Certificates into the target environment
-XBPS_ARCH="x86_64" xbps-install -y -R "$REPO_URL" -r /mnt ca-certificates
-
-# 4. Bootstrap Base System & Repository Extension packages
-XBPS_ARCH="x86_64" xbps-install -y -R "$REPO_URL" -r /mnt \
-  base-system void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
-
-# 5. Synchronize Non-Free/Multilib indices and install Desktop & Utilities
-XBPS_ARCH="x86_64" xbps-install -S -R "$REPO_URL" -r /mnt
-XBPS_ARCH="x86_64" xbps-install -y -R "$REPO_URL" -r /mnt \
-  xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
-  git curl wget picom plank cava jq htop unzip sudo \
-  elogind polkit font-roboto-ttf jetbrains-mono
-
-# 7. FSTAB Generation
 clear
+
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [5/7] Generating /etc/fstab...                       ${C_RESET}"
-echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
+echo -e "${C_MAGENTA}${C_BOLD}       [4/7] INSTALLING VOID BASE SYSTEM             ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo
+
+echo -e "${C_YELLOW}Installing base-system and kernel...${C_RESET}"
+
+XBPS_ARCH=x86_64 xbps-install \
+    -S \
+    -r /mnt \
+    -R "$REPO_URL" \
+    base-system \
+    linux
+
+echo
+echo -e "${C_GREEN}Void base system installed.${C_RESET}"
+
+# ------------------------------------------------------------
+# INSTALL REPOSITORIES
+# ------------------------------------------------------------
+
+echo
+echo -e "${C_YELLOW}Installing repository definitions...${C_RESET}"
+
+XBPS_ARCH=x86_64 xbps-install \
+    -y \
+    -r /mnt \
+    -R "$REPO_URL" \
+    void-repo-nonfree
+
+# ------------------------------------------------------------
+# INSTALL DESKTOP
+# ------------------------------------------------------------
+
+echo
+echo -e "${C_YELLOW}Installing XFCE and desktop packages...${C_RESET}"
+
+XBPS_ARCH=x86_64 xbps-install \
+    -y \
+    -r /mnt \
+    -R "$REPO_URL" \
+    xfce4 \
+    xfce4-pulseaudio-plugin \
+    Thunar \
+    lightdm \
+    lightdm-gtk-greeter \
+    NetworkManager \
+    dbus \
+    elogind \
+    polkit \
+    sudo \
+    grub-x86_64-efi \
+    efibootmgr \
+    git \
+    curl \
+    wget \
+    unzip \
+    htop \
+    jq \
+    picom \
+    plank \
+    cava \
+    font-roboto-ttf \
+    jetbrains-mono
+
+echo
+echo -e "${C_GREEN}Desktop packages installed.${C_RESET}"
+
+# ------------------------------------------------------------
+# UPDATE TARGET
+# ------------------------------------------------------------
+
+echo
+echo -e "${C_YELLOW}Updating installed packages...${C_RESET}"
+
+XBPS_ARCH=x86_64 xbps-install \
+    -y \
+    -r /mnt \
+    -u
+
+# ------------------------------------------------------------
+# FSTAB
+# ------------------------------------------------------------
+
+clear
+
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD}              [5/7] CREATING FSTAB                   ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo
 
 UUID_ROOT=$(blkid -s UUID -o value "$PART_ROOT")
 UUID_EFI=$(blkid -s UUID -o value "$PART_EFI")
 UUID_SWAP=$(blkid -s UUID -o value "$PART_SWAP")
 
-cat <<EOF > /mnt/etc/fstab
-UUID=$UUID_ROOT / ext4 defaults 0 1
-UUID=$UUID_EFI /boot/efi vfat defaults 0 2
-UUID=$UUID_SWAP swap swap defaults 0 0
-EOF
-
-# 8. Chroot Execution
-clear
-echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [6/7] Configuring System, User, Services, & Dotfiles..${C_RESET}"
-echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
-
-for sysfs in /dev /proc /sys /run; do
-    mount --bind "$sysfs" "/mnt$sysfs"
-done
-
-export ROOT_PASS USERNAME USER_PASS XBPS_ARCH
-
-chroot /mnt /bin/bash <<'EOF'
-set -e
-
-# Set Passwords & Add User
-echo "root:$ROOT_PASS" | chpasswd
-useradd -m -G wheel,audio,video,input,storage -s /bin/bash "$USERNAME"
-echo "$USERNAME:$USER_PASS" | chpasswd
-
-# Sudo Privileges
-echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
-chmod 0440 /etc/sudoers.d/wheel
-
-# System Services
-ln -sf /etc/sv/dbus /etc/runit/runsvdir/default/
-ln -sf /etc/sv/elogind /etc/runit/runsvdir/default/
-ln -sf /etc/sv/lightdm /etc/runit/runsvdir/default/
-ln -sf /etc/sv/NetworkManager /etc/runit/runsvdir/default/
-
-# Dotfiles
-USER_HOME="/home/$USERNAME"
-mkdir -p "$USER_HOME/.config" "$USER_HOME/.themes" "$USER_HOME/.icons"
-
-shopt -s dotglob
-rm -rf "$USER_HOME/dotties_temp"
-git clone --depth 1 https://github.com/mehedirm6244/My_XFCE_dotties.git "$USER_HOME/dotties_temp"
-
-SRC_DIR="$USER_HOME/dotties_temp"
-if [ -d "$USER_HOME/dotties_temp/Dotfiles" ]; then
-    SRC_DIR="$USER_HOME/dotties_temp/Dotfiles"
+if [ -z "$UUID_ROOT" ] || [ -z "$UUID_EFI" ] || [ -z "$UUID_SWAP" ]; then
+    error_exit "Could not determine partition UUIDs."
 fi
 
-if [ -d "$SRC_DIR" ]; then
-    [ -d "$SRC_DIR/.config" ] && cp -r "$SRC_DIR/.config/"* "$USER_HOME/.config/" 2>/dev/null || true
-    [ -d "$SRC_DIR/.themes" ] && cp -r "$SRC_DIR/.themes/"* "$USER_HOME/.themes/" 2>/dev/null || true
-    [ -d "$SRC_DIR/.icons" ] && cp -r "$SRC_DIR/.icons/"* "$USER_HOME/.icons/" 2>/dev/null || true
-    rm -rf "$USER_HOME/dotties_temp"
-fi
-shopt -u dotglob
+cat > /mnt/etc/fstab <<EOF
+# Void Linux filesystem table
 
-chown -R "$USERNAME:$USERNAME" "$USER_HOME"
-
-# Regenerate Initramfs and GRUB Bootloader
-dracut --regenerate-all --force
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void"
-update-grub
+UUID=$UUID_ROOT / ext4 defaults,noatime 0 1
+UUID=$UUID_EFI /boot/efi vfat defaults,noatime 0 2
+UUID=$UUID_SWAP none swap sw 0 0
 EOF
 
-# 9. Clean Unmount
+echo -e "${C_GREEN}/etc/fstab created:${C_RESET}"
+cat /mnt/etc/fstab
+
+# ------------------------------------------------------------
+# HOSTNAME
+# ------------------------------------------------------------
+
+echo
+read -r -p "Hostname [voidlinux]: " HOSTNAME
+
+HOSTNAME="${HOSTNAME:-voidlinux}"
+
+echo "$HOSTNAME" > /mnt/etc/hostname
+
+# ------------------------------------------------------------
+# CHROOT MOUNTS
+# ------------------------------------------------------------
+
 clear
+
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [7/7] Unmounting partitions cleanly...               ${C_RESET}"
-echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
+echo -e "${C_MAGENTA}${C_BOLD}          [6/7] CONFIGURING VOID LINUX              ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo
 
-safe_umount
-trap - EXIT
+echo -e "${C_YELLOW}Preparing chroot environment...${C_RESET}"
+
+# /proc
+mount -t proc proc /mnt/proc
+
+# /sys
+mount --rbind /sys /mnt/sys
+mount --make-rslave /mnt/sys
+
+# /dev
+mount --rbind /dev /mnt/dev
+mount --make-rslave /mnt/dev
+
+# /run
+mount --rbind /run /mnt/run
+mount --make-rslave /mnt/run
+
+# ------------------------------------------------------------
+# PASS VARIABLES INTO CHROOT
+# ------------------------------------------------------------
+
+export TARGET_USERNAME="$USERNAME"
+export TARGET_USER_PASSWORD="$USER_PASS"
+export TARGET_ROOT_PASSWORD="$ROOT_PASS"
+export TARGET_HOSTNAME="$HOSTNAME"
+
+# ------------------------------------------------------------
+# CHROOT CONFIGURATION
+# ------------------------------------------------------------
+
+echo -e "${C_YELLOW}Entering Void Linux chroot...${C_RESET}"
+
+chroot /mnt /bin/bash <<'CHROOT_EOF'
+
+set -Eeuo pipefail
+
+echo
+echo "=============================================="
+echo " Configuring Void Linux"
+echo "=============================================="
+echo
+
+# ----------------------------------------------------------
+# HOSTNAME
+# ----------------------------------------------------------
+
+echo "$TARGET_HOSTNAME" > /etc/hostname
+
+# ----------------------------------------------------------
+# ROOT PASSWORD
+# ----------------------------------------------------------
+
+echo "root:$TARGET_ROOT_PASSWORD" | chpasswd
+
+# ----------------------------------------------------------
+# CREATE USER
+# ----------------------------------------------------------
+
+if ! id "$TARGET_USERNAME" >/dev/null 2>&1; then
+
+    useradd \
+        -m \
+        -G wheel,audio,video,input,storage \
+        -s /bin/bash \
+        "$TARGET_USERNAME"
+
+fi
+
+echo "$TARGET_USERNAME:$TARGET_USER_PASSWORD" | chpasswd
+
+# ----------------------------------------------------------
+# SUDO
+# ----------------------------------------------------------
+
+mkdir -p /etc/sudoers.d
+
+cat > /etc/sudoers.d/10-wheel <<EOF
+%wheel ALL=(ALL:ALL) ALL
+EOF
+
+chmod 0440 /etc/sudoers.d/10-wheel
+
+# ----------------------------------------------------------
+# LOCALE
+# ----------------------------------------------------------
+
+if [ -f /etc/default/libc-locales ]; then
+
+    sed -i \
+        's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' \
+        /etc/default/libc-locales
+
+fi
+
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+# ----------------------------------------------------------
+# SERVICES
+# ----------------------------------------------------------
+
+mkdir -p /var/service
+
+# D-Bus
+if [ -d /etc/sv/dbus ]; then
+    ln -sf /etc/sv/dbus /var/service/dbus
+fi
+
+# elogind
+if [ -d /etc/sv/elogind ]; then
+    ln -sf /etc/sv/elogind /var/service/elogind
+fi
+
+# NetworkManager
+if [ -d /etc/sv/NetworkManager ]; then
+    ln -sf /etc/sv/NetworkManager /var/service/NetworkManager
+fi
+
+# LightDM
+if [ -d /etc/sv/lightdm ]; then
+    ln -sf /etc/sv/lightdm /var/service/lightdm
+fi
+
+# ----------------------------------------------------------
+# XFCE USER DIRECTORIES
+# ----------------------------------------------------------
+
+USER_HOME="/home/$TARGET_USERNAME"
+
+mkdir -p "$USER_HOME/.config"
+mkdir -p "$USER_HOME/.themes"
+mkdir -p "$USER_HOME/.icons"
+
+# ----------------------------------------------------------
+# INSTALL XFCE DOTFILES
+# ----------------------------------------------------------
+
+echo
+echo "Installing XFCE dotfiles..."
+
+if command -v git >/dev/null 2>&1; then
+
+    TEMP_DOTS="$USER_HOME/dotties_temp"
+
+    rm -rf "$TEMP_DOTS"
+
+    if git clone \
+        --depth 1 \
+        https://github.com/mehedirm6244/My_XFCE_dotties.git \
+        "$TEMP_DOTS"; then
+
+        SRC_DIR="$TEMP_DOTS"
+
+        if [ -d "$TEMP_DOTS/Dotfiles" ]; then
+            SRC_DIR="$TEMP_DOTS/Dotfiles"
+        fi
+
+        if [ -d "$SRC_DIR/.config" ]; then
+            cp -a "$SRC_DIR/.config/." "$USER_HOME/.config/"
+        fi
+
+        if [ -d "$SRC_DIR/.themes" ]; then
+            cp -a "$SRC_DIR/.themes/." "$USER_HOME/.themes/"
+        fi
+
+        if [ -d "$SRC_DIR/.icons" ]; then
+            cp -a "$SRC_DIR/.icons/." "$USER_HOME/.icons/"
+        fi
+
+        rm -rf "$TEMP_DOTS"
+
+        echo "XFCE dotfiles installed."
+
+    else
+
+        echo "WARNING: Could not download XFCE dotfiles."
+        echo "The installation will continue."
+
+    fi
+
+fi
+
+# ----------------------------------------------------------
+# OWNERSHIP
+# ----------------------------------------------------------
+
+chown -R \
+    "$TARGET_USERNAME:$TARGET_USERNAME" \
+    "$USER_HOME"
+
+# ----------------------------------------------------------
+# GRUB CONFIGURATION
+# ----------------------------------------------------------
+
+echo
+echo "Installing GRUB..."
+
+grub-install \
+    --target=x86_64-efi \
+    --efi-directory=/boot/efi \
+    --bootloader-id="Void"
+
+# ----------------------------------------------------------
+# GRUB CONFIG
+# ----------------------------------------------------------
+
+grub-mkconfig -o /boot/grub/grub.cfg
+
+# ----------------------------------------------------------
+# LOCALE
+# ----------------------------------------------------------
+
+if command -v xbps-reconfigure >/dev/null 2>&1; then
+
+    if [ -f /etc/default/libc-locales ]; then
+        xbps-reconfigure -f glibc-locales || true
+    fi
+
+fi
+
+# ----------------------------------------------------------
+# FINAL PACKAGE CONFIGURATION
+# ----------------------------------------------------------
+
+echo
+echo "Running xbps-reconfigure..."
+
+xbps-reconfigure -fa
+
+echo
+echo "=============================================="
+echo " Chroot configuration complete"
+echo "=============================================="
+
+CHROOT_EOF
+
+# ------------------------------------------------------------
+# REMOVE PASSWORD VARIABLES
+# ------------------------------------------------------------
+
+unset TARGET_USERNAME
+unset TARGET_USER_PASSWORD
+unset TARGET_ROOT_PASSWORD
+unset TARGET_HOSTNAME
+
+# ------------------------------------------------------------
+# FINAL GRUB REBUILD
+# ------------------------------------------------------------
+
+echo
+echo -e "${C_GREEN}Chroot configuration completed.${C_RESET}"
+
+# ------------------------------------------------------------
+# SYNC
+# ------------------------------------------------------------
+
+sync
+
+# ------------------------------------------------------------
+# UNMOUNT
+# ------------------------------------------------------------
 
 clear
-echo -e "\n${C_GREEN}======================================================${C_RESET}"
-echo -e "${C_GREEN}${C_BOLD}    INSTALLATION COMPLETE! YOU CAN REBOOT NOW         ${C_RESET}"
-echo -e "${C_GREEN}======================================================${C_RESET}\n"
+
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD}             [7/7] FINALIZING INSTALL                ${C_RESET}"
+echo -e "${C_MAGENTA}======================================================${C_RESET}"
+echo
+
+echo -e "${C_YELLOW}Synchronizing disk...${C_RESET}"
+
+sync
+
+echo -e "${C_YELLOW}Disabling swap...${C_RESET}"
+
+swapoff "$PART_SWAP" 2>/dev/null || true
+
+echo -e "${C_YELLOW}Unmounting filesystems...${C_RESET}"
+
+umount -R /mnt 2>/dev/null || true
+
+sync
+
+# ------------------------------------------------------------
+# SUCCESS
+# ------------------------------------------------------------
+
+trap - ERR
+
+clear
+
+echo
+echo -e "${C_GREEN}======================================================${C_RESET}"
+echo -e "${C_GREEN}${C_BOLD}          VOID LINUX INSTALLATION COMPLETE            ${C_RESET}"
+echo -e "${C_GREEN}======================================================${C_RESET}"
+echo
+echo -e "${C_GREEN}Disk:${C_RESET}      $DISK"
+echo -e "${C_GREEN}Root:${C_RESET}      $PART_ROOT"
+echo -e "${C_GREEN}EFI:${C_RESET}       $PART_EFI"
+echo -e "${C_GREEN}Swap:${C_RESET}      $PART_SWAP"
+echo -e "${C_GREEN}Hostname:${C_RESET}  $HOSTNAME"
+echo -e "${C_GREEN}Username:${C_RESET}  $USERNAME"
+echo
+echo -e "${C_YELLOW}XFCE + LightDM + NetworkManager + GRUB installed.${C_RESET}"
+echo
+echo -e "${C_GREEN}Remove the USB drive and reboot.${C_RESET}"
+echo
+echo -e "${C_CYAN}======================================================${C_RESET}"
+echo
