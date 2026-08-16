@@ -1,6 +1,9 @@
 #!/bin/bash
 set -eo pipefail
 
+# Export XBPS target architecture globally
+export XBPS_ARCH="x86_64"
+
 # Define ANSI Color Codes
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
@@ -90,7 +93,7 @@ else
     PART_ROOT="${DISK}3"
 fi
 
-# 2. Gather User Inputs
+# 2. Gather User Inputs (Visible Passwords)
 clear
 echo -e "${C_CYAN}======================================================${C_RESET}"
 echo -e "${C_CYAN}${C_BOLD}         STEP 2: SYSTEM & USER CONFIGURATION          ${C_RESET}"
@@ -98,10 +101,8 @@ echo -e "${C_CYAN}======================================================${C_RESE
 
 read -p "$(echo -e ${C_BOLD}"Enter Swap size in GB (e.g., 2, 4, 8): "${C_RESET})" SWAP_SIZE
 read -p "$(echo -e ${C_BOLD}"Enter your desired Username: "${C_RESET})" USERNAME
-read -sp "$(echo -e ${C_BOLD}"Enter Password for $USERNAME: "${C_RESET})" USER_PASS
-echo ""
-read -sp "$(echo -e ${C_BOLD}"Enter Root Password: "${C_RESET})" ROOT_PASS
-echo ""
+read -p "$(echo -e ${C_BOLD}"Enter Password for $USERNAME: "${C_RESET})" USER_PASS
+read -p "$(echo -e ${C_BOLD}"Enter Root Password: "${C_RESET})" ROOT_PASS
 
 # Verify inputs aren't empty
 if [ -z "$USERNAME" ] || [ -z "$USER_PASS" ] || [ -z "$ROOT_PASS" ] || [ -z "$SWAP_SIZE" ]; then
@@ -119,6 +120,8 @@ echo -e "${C_YELLOW} EFI Partition:   ${C_RESET}$PART_EFI (512MB)"
 echo -e "${C_YELLOW} Swap Partition:  ${C_RESET}$PART_SWAP (${SWAP_SIZE}GB)"
 echo -e "${C_YELLOW} Root Partition:  ${C_RESET}$PART_ROOT (Remaining Space)"
 echo -e "${C_YELLOW} Username:        ${C_RESET}$USERNAME"
+echo -e "${C_YELLOW} User Password:   ${C_RESET}$USER_PASS"
+echo -e "${C_YELLOW} Root Password:   ${C_RESET}$ROOT_PASS"
 echo -e "${C_YELLOW} Custom Dotfiles: ${C_RESET}https://github.com/mehedirm6244/My_XFCE_dotties"
 echo -e "${C_RED}------------------------------------------------------${C_RESET}"
 read -p "$(echo -e ${C_RED}${C_BOLD}"Type 'YES' to wipe $DISK and begin: "${C_RESET})" CONFIRM
@@ -149,15 +152,19 @@ mkfs.vfat -F32 "$PART_EFI"
 mkswap "$PART_SWAP"
 mkfs.ext4 -F "$PART_ROOT"
 
-# 5. Mounting
+# 5. Mounting & DNS Copy
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems...                         ${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & setup DNS...             ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 mount "$PART_ROOT" /mnt
 mkdir -p /mnt/boot/efi
 mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
+
+mkdir -p /mnt/etc /mnt/var/db/xbps/keys
+cp -L /etc/resolv.conf /mnt/etc/
+cp -a /var/db/xbps/keys/* /mnt/var/db/xbps/keys/ 2>/dev/null || true
 
 # 6. Installing Repositories & Base Packages
 clear
@@ -165,31 +172,33 @@ echo -e "${C_MAGENTA}======================================================${C_R
 echo -e "${C_MAGENTA}${C_BOLD} [4/7] Synchronizing Repositories & Installing Base... ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 
-# Step A: Explicitly define repository URL to guarantee pool resolution
 REPO_URL="https://repo-default.voidlinux.org/current"
 
-# Step B: Synchronize repository database into target directory
-XBPS_ARCH=x86_64 xbps-install -S -R "$REPO_URL" -r /mnt
+# Update host certificates to eliminate SSL validation bugs
+xbps-install -Sy ca-certificates || true
 
-# Step C: Install repository extension packages first
-XBPS_ARCH=x86_64 xbps-install -y -R "$REPO_URL" -r /mnt \
+# Bootstrapping base-system directly to target directory /mnt
+xbps-install -Sy -R "$REPO_URL" -r /mnt base-system
+
+# Install Nonfree & Multilib repository extension packages
+xbps-install -y -R "$REPO_URL" -r /mnt \
   void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
 
-# Step D: Sync again to register new repos
-XBPS_ARCH=x86_64 xbps-install -S -r /mnt
+# Resync target repository database with nonfree enabled
+xbps-install -Sy -r /mnt
 
-# Step E: Install base-system and desktop packages
-XBPS_ARCH=x86_64 xbps-install -y -r /mnt \
-  base-system xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
-  git curl wget picom plank cava jq htop unzip ca-certificates sudo \
+# Install core system, desktop environment, fonts, and utilities
+xbps-install -y -r /mnt \
+  xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
+  git curl wget picom plank cava jq htop unzip sudo \
   elogind polkit font-roboto-ttf jetbrains-mono
 
 # 7. System Setup
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [5/7] Generating /etc/fstab and DNS settings...       ${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [5/7] Generating /etc/fstab...                       ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
-mkdir -p /mnt/etc
+
 UUID_ROOT=$(blkid -s UUID -o value "$PART_ROOT")
 UUID_EFI=$(blkid -s UUID -o value "$PART_EFI")
 UUID_SWAP=$(blkid -s UUID -o value "$PART_SWAP")
@@ -199,8 +208,6 @@ UUID=$UUID_ROOT / ext4 defaults 0 1
 UUID=$UUID_EFI /boot/efi vfat defaults 0 2
 UUID=$UUID_SWAP swap swap defaults 0 0
 EOF
-
-cp /etc/resolv.conf /mnt/etc/resolv.conf
 
 # 8. Chroot Configuration
 clear
@@ -214,7 +221,7 @@ for sysfs in /dev /proc /sys /run; do
 done
 
 # Pass host variables explicitly to chroot environment
-export ROOT_PASS USERNAME USER_PASS
+export ROOT_PASS USERNAME USER_PASS XBPS_ARCH
 
 chroot /mnt /bin/bash <<'EOF'
 set -e
