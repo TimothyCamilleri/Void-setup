@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eo pipefail
 
-# Export XBPS target architecture globally  v10
+# Export XBPS target architecture globally
 export XBPS_ARCH="x86_64"
 
 # Define ANSI Color Codes
@@ -55,7 +55,7 @@ if ! ping -c 1 -W 3 repo-default.voidlinux.org >/dev/null 2>&1; then
     exit 1
 fi
 echo -e "${C_GREEN}Network OK.${C_RESET}"
-pause_step
+sleep 1
 
 # 1. Multi-Drive Identification & Target Selection
 clear
@@ -98,8 +98,6 @@ else
     PART_SWAP="${DISK}2"
     PART_ROOT="${DISK}3"
 fi
-
-pause_step
 
 # 2. Gather User Inputs (Visible Passwords)
 clear
@@ -162,8 +160,6 @@ mkfs.vfat -F32 "$PART_EFI"
 mkswap "$PART_SWAP"
 mkfs.ext4 -F "$PART_ROOT"
 
-pause_step
-
 # 5. Mounting & DNS Copy
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
@@ -177,8 +173,6 @@ swapon "$PART_SWAP"
 mkdir -p /mnt/etc /mnt/var/db/xbps/keys
 cp -L /etc/resolv.conf /mnt/etc/
 cp -a /var/db/xbps/keys/* /mnt/var/db/xbps/keys/ 2>/dev/null || true
-
-pause_step
 
 # 6. Installing Repositories & Base Packages
 clear
@@ -207,8 +201,6 @@ xbps-install -y -r /mnt \
   git curl wget picom plank cava jq htop unzip sudo \
   elogind polkit font-roboto-ttf jetbrains-mono
 
-pause_step
-
 # 7. System Setup
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
@@ -224,8 +216,6 @@ UUID=$UUID_ROOT / ext4 defaults 0 1
 UUID=$UUID_EFI /boot/efi vfat defaults 0 2
 UUID=$UUID_SWAP swap swap defaults 0 0
 EOF
-
-pause_step
 
 # 8. Chroot Configuration
 clear
@@ -289,8 +279,6 @@ dracut --regenerate-all --force
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void"
 update-grub
 EOF
-
-pause_step
 
 # 9. Clean Unmount
 clear
