@@ -47,7 +47,7 @@ echo -e "${C_CYAN}======================================================${C_RESE
 echo -e "${C_CYAN}${C_BOLD}   AUTOMATED VOID LINUX + CUSTOM XFCE RICE INSTALLER  ${C_RESET}"
 echo -e "${C_CYAN}======================================================${C_RESET}\n"
 
-# Pre-flight Check: Internet Connection & SSL Time Sync (Fixes XBPS segfaults)
+# Pre-flight Check: Internet Connection & SSL Time Sync
 echo -e "${C_MAGENTA}==> Verifying network connectivity & syncing system time...${C_RESET}"
 if ! ping -c 1 -W 3 repo-default.voidlinux.org >/dev/null 2>&1; then
     echo -e "${C_RED}Error: No internet connection detected or mirror is unreachable.${C_RESET}"
@@ -55,7 +55,7 @@ if ! ping -c 1 -W 3 repo-default.voidlinux.org >/dev/null 2>&1; then
     exit 1
 fi
 
-# Sync system time to prevent OpenSSL segfaults inside XBPS
+# Sync system time to prevent OpenSSL signature mismatches
 ulimit -n 4096 2>/dev/null || true
 chronyd -q 'server pool.ntp.org iburst' 2>/dev/null || ntpdate pool.ntp.org 2>/dev/null || true
 echo -e "${C_GREEN}Network & Time Sync OK.${C_RESET}"
@@ -103,7 +103,7 @@ else
     PART_ROOT="${DISK}3"
 fi
 
-# 2. Gather User Inputs (Visible Passwords)
+# 2. Gather User Inputs
 clear
 echo -e "${C_CYAN}======================================================${C_RESET}"
 echo -e "${C_CYAN}${C_BOLD}         STEP 2: SYSTEM & USER CONFIGURATION          ${C_RESET}"
@@ -114,7 +114,6 @@ read -p "$(echo -e ${C_BOLD}"Enter your desired Username: "${C_RESET})" USERNAME
 read -p "$(echo -e ${C_BOLD}"Enter Password for $USERNAME: "${C_RESET})" USER_PASS
 read -p "$(echo -e ${C_BOLD}"Enter Root Password: "${C_RESET})" ROOT_PASS
 
-# Verify inputs aren't empty
 if [ -z "$USERNAME" ] || [ -z "$USER_PASS" ] || [ -z "$ROOT_PASS" ] || [ -z "$SWAP_SIZE" ]; then
     echo -e "${C_RED}Error: All input fields are required.${C_RESET}"
     exit 1
@@ -164,7 +163,7 @@ mkfs.vfat -F32 "$PART_EFI"
 mkswap "$PART_SWAP"
 mkfs.ext4 -F "$PART_ROOT"
 
-# 5. Mounting & Setup Target XBPS Environment
+# 5. Mounting & Setup Target XBPS Keys
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
 echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & preparing target...       ${C_RESET}"
@@ -174,10 +173,10 @@ mkdir -p /mnt/boot/efi
 mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
 
-# Prepare Target Configuration
+# Explicitly provision network and XBPS public keys to target
 mkdir -p /mnt/etc /mnt/var/db/xbps/keys
 cp -L /etc/resolv.conf /mnt/etc/
-cp -a /var/db/xbps/keys/* /mnt/var/db/xbps/keys/ 2>/dev/null || true
+cp -a /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
 
 # 6. Synchronizing Repositories & Installing Base
 clear
@@ -187,20 +186,23 @@ echo -e "${C_MAGENTA}======================================================${C_R
 
 REPO_URL="https://repo-default.voidlinux.org/current"
 
-# Synchronize local keys & package indices first
+# Sync host repository tree first
 xbps-install -S
 
-# Booststrap base system safely step-by-step
+# Step 1: Install base system directly with root dir target
 xbps-install -Sy -R "$REPO_URL" -r /mnt base-system
 
-# Install repository extensions
+# Step 2: Sync target XBPS repo state
+xbps-install -Sy -r /mnt
+
+# Step 3: Enable multilib/nonfree repositories inside /mnt
 xbps-install -y -R "$REPO_URL" -r /mnt \
   void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
 
-# Update repository state inside chroot environment
+# Step 4: Refresh target indices after repo expansion
 xbps-install -Sy -r /mnt
 
-# Install Desktop Environment & tools
+# Step 5: Install Desktop Environment & user utilities
 xbps-install -y -r /mnt \
   xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip sudo \
@@ -248,7 +250,7 @@ echo "$USERNAME:$USER_PASS" | chpasswd
 echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
 chmod 0440 /etc/sudoers.d/wheel
 
-# Enable runit services (polkit runs automatically via dbus)
+# Enable runit services
 ln -s /etc/sv/dbus /etc/runit/runsvdir/default/
 ln -s /etc/sv/elogind /etc/runit/runsvdir/default/
 ln -s /etc/sv/lightdm /etc/runit/runsvdir/default/
