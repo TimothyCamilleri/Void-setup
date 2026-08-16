@@ -19,6 +19,16 @@ pause_step() {
     read -r
 }
 
+# Safe unmount helper
+safe_umount() {
+    swapoff -a 2>/dev/null || true
+    umount -l /mnt/dev 2>/dev/null || true
+    umount -l /mnt/proc 2>/dev/null || true
+    umount -l /mnt/sys 2>/dev/null || true
+    umount -l /mnt/run 2>/dev/null || true
+    umount -R /mnt 2>/dev/null || true
+}
+
 # Cleanup trap to unmount everything safely on unexpected failure
 cleanup() {
     local exit_code=$?
@@ -26,12 +36,7 @@ cleanup() {
         echo -e "\n${C_RED}======================================================${C_RESET}"
         echo -e "${C_RED} ERROR OCCURRED! Cleaning up mounted filesystems...  ${C_RESET}"
         echo -e "${C_RED}======================================================${C_RESET}"
-        umount -l /mnt/dev 2>/dev/null || true
-        umount -l /mnt/proc 2>/dev/null || true
-        umount -l /mnt/sys 2>/dev/null || true
-        umount -l /mnt/run 2>/dev/null || true
-        swapoff -a 2>/dev/null || true
-        umount -R /mnt 2>/dev/null || true
+        safe_umount
     fi
 }
 trap cleanup EXIT
@@ -86,11 +91,7 @@ if [ ! -b "$DISK" ]; then
 fi
 
 # Ensure drive isn't actively mounted
-if grep -qs "$DISK" /proc/mounts; then
-    echo -e "${C_RED}Error: Disk $DISK or one of its partitions is currently mounted!${C_RESET}"
-    echo -e "${C_RED}Unmount the drive/partitions and run the script again.${C_RESET}"
-    exit 1
-fi
+safe_umount
 
 # Determine partition naming scheme
 if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
@@ -145,12 +146,20 @@ clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
 echo -e "${C_MAGENTA}${C_BOLD} [1/7] Wiping and Partitioning $DISK (GPT)...          ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
+
+# Wipe existing partition metadata to prevent locks
+wipefs -af "$DISK" 2>/dev/null || true
+
 sfdisk "$DISK" <<EOF
 label: gpt
 size=512M, type=U, name="EFI"
 size=${SWAP_SIZE}G, type=S, name="SWAP"
 size=+, type=L, name="ROOT"
 EOF
+
+# Force kernel to re-read partition table
+partprobe "$DISK" || true
+sleep 2
 
 pause_step
 
@@ -159,47 +168,57 @@ clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
 echo -e "${C_MAGENTA}${C_BOLD} [2/7] Formatting partitions...                        ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
+
 mkfs.vfat -F32 "$PART_EFI"
-mkswap "$PART_SWAP"
+mkswap -f "$PART_SWAP"
 mkfs.ext4 -F "$PART_ROOT"
 
-# 5. Mounting & Complete Target XBPS Initialization (FIXED STEP 3/7)
+# 5. Mounting & Directory Initialization (FIXED STEP 3/7)
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & bootstrapping target DB...${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & bootstrapping directories...${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 
-# Mount base structure
+# Clean target directory before mounting
+mkdir -p /mnt
 mount "$PART_ROOT" /mnt
+
+# Clean up inside /mnt if remnant files exist
+rm -rf /mnt/* /mnt/.* 2>/dev/null || true
+
+# Bootstrapping directory hierarchy
 mkdir -p /mnt/boot/efi
+mkdir -p /mnt/etc
+mkdir -p /mnt/var/db/xbps/keys
+mkdir -p /mnt/var/cache/xbps
+
+# Mount EFI and activate Swap
 mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
 
-# Bootstrap target directory layout
-mkdir -p /mnt/etc /mnt/var/db/xbps/keys /mnt/etc/ssl/certs
-
-# Copy DNS resolver, SSL certs, and XBPS RSA signing keys
+# Populate base keys and DNS resolve configuration
 cp -L /etc/resolv.conf /mnt/etc/ 2>/dev/null || true
-cp -a /etc/ssl/certs/* /mnt/etc/ssl/certs/ 2>/dev/null || true
-cp -a /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
+cp -a /var/db/xbps/keys/* /mnt/var/db/xbps/keys/ 2>/dev/null || true
 
-# 6. Synchronizing Repositories & Installing Base System
+echo -e "${C_GREEN}Step 3 completed successfully.${C_RESET}"
+sleep 1
+
+# 6. Synchronizing Repositories & Installing Packages
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [4/7] Installing Base System & Desktop Environment...${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [4/7] Installing Base System & Packages...           ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 
 REPO_URL="https://repo-default.voidlinux.org/current"
 
-# Bootstrap essential base-system directly without pre-updating /mnt
-xbps-install -y -u xbps 2>/dev/null || true
-xbps-install -y -S -R "$REPO_URL" -r /mnt base-system
+# Update host XBPS state first
+xbps-install -Sy
 
-# Install repository extensions into target
-xbps-install -y -R "$REPO_URL" -r /mnt void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
+# Install base system directly to root
+xbps-install -Sy -R "$REPO_URL" -r /mnt base-system void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
 
-# Install Desktop Environment & tools in a single unified execution
-xbps-install -y -S -R "$REPO_URL" -r /mnt \
+# Install Desktop Environment & required user tools
+xbps-install -Sy -R "$REPO_URL" -r /mnt \
   xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip sudo \
   elogind polkit font-roboto-ttf jetbrains-mono
@@ -288,13 +307,8 @@ clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
 echo -e "${C_MAGENTA}${C_BOLD} [7/7] Unmounting partitions cleanly...               ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
-umount -l /mnt/dev || true
-umount -l /mnt/proc || true
-umount -l /mnt/sys || true
-umount -l /mnt/run || true
 
-swapoff "$PART_SWAP"
-umount -R /mnt
+safe_umount
 
 # Disable trap after successful completion
 trap - EXIT
