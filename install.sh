@@ -163,47 +163,43 @@ mkfs.vfat -F32 "$PART_EFI"
 mkswap "$PART_SWAP"
 mkfs.ext4 -F "$PART_ROOT"
 
-# 5. Mounting & Setup Target XBPS Keys
+# 5. Mounting & Complete Target XBPS Initialization (FIXED STEP 3/7)
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & preparing target...       ${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & bootstrapping target DB...${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
+
+# Mount base structure
 mount "$PART_ROOT" /mnt
 mkdir -p /mnt/boot/efi
 mount "$PART_EFI" /mnt/boot/efi
 swapon "$PART_SWAP"
 
-# Explicitly provision network and XBPS public keys to target
-mkdir -p /mnt/etc /mnt/var/db/xbps/keys
-cp -L /etc/resolv.conf /mnt/etc/
+# Bootstrap target directory layout
+mkdir -p /mnt/etc /mnt/var/db/xbps/keys /mnt/etc/ssl/certs
+
+# Copy DNS resolver, SSL certs, and XBPS RSA signing keys
+cp -L /etc/resolv.conf /mnt/etc/ 2>/dev/null || true
+cp -a /etc/ssl/certs/* /mnt/etc/ssl/certs/ 2>/dev/null || true
 cp -a /var/db/xbps/keys/* /mnt/var/db/xbps/keys/
 
-# 6. Synchronizing Repositories & Installing Base
+# 6. Synchronizing Repositories & Installing Base System
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [4/7] Synchronizing Repositories & Installing Base... ${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [4/7] Installing Base System & Desktop Environment...${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 
 REPO_URL="https://repo-default.voidlinux.org/current"
 
-# Sync host repository tree first
-xbps-install -S
+# Bootstrap essential base-system directly without pre-updating /mnt
+xbps-install -y -u xbps 2>/dev/null || true
+xbps-install -y -S -R "$REPO_URL" -r /mnt base-system
 
-# Step 1: Install base system directly with root dir target
-xbps-install -Sy -R "$REPO_URL" -r /mnt base-system
+# Install repository extensions into target
+xbps-install -y -R "$REPO_URL" -r /mnt void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
 
-# Step 2: Sync target XBPS repo state
-xbps-install -Sy -r /mnt
-
-# Step 3: Enable multilib/nonfree repositories inside /mnt
-xbps-install -y -R "$REPO_URL" -r /mnt \
-  void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
-
-# Step 4: Refresh target indices after repo expansion
-xbps-install -Sy -r /mnt
-
-# Step 5: Install Desktop Environment & user utilities
-xbps-install -y -r /mnt \
+# Install Desktop Environment & tools in a single unified execution
+xbps-install -y -S -R "$REPO_URL" -r /mnt \
   xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip sudo \
   elogind polkit font-roboto-ttf jetbrains-mono
