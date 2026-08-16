@@ -157,9 +157,23 @@ size=${SWAP_SIZE}G, type=S, name="SWAP"
 size=+, type=L, name="ROOT"
 EOF
 
-# Force kernel to re-read partition table
-partprobe "$DISK" || true
-sleep 2
+# Force kernel partition table reload using built-in udev/blockdev tools
+blockdev --rereadpt "$DISK" 2>/dev/null || true
+udevadm trigger --subsystem-match=block 2>/dev/null || true
+udevadm settle 2>/dev/null || true
+
+# Wait until partition nodes appear in /dev
+for part in "$PART_EFI" "$PART_SWAP" "$PART_ROOT"; do
+    count=0
+    while [ ! -b "$part" ]; do
+        sleep 0.5
+        count=$((count+1))
+        if [ $count -gt 10 ]; then
+            echo -e "${C_RED}Error: Partition $part was not created properly.${C_RESET}"
+            exit 1
+        fi
+    done
+done
 
 pause_step
 
@@ -169,11 +183,13 @@ echo -e "${C_MAGENTA}======================================================${C_R
 echo -e "${C_MAGENTA}${C_BOLD} [2/7] Formatting partitions...                        ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 
+safe_umount
+
 mkfs.vfat -F32 "$PART_EFI"
 mkswap -f "$PART_SWAP"
 mkfs.ext4 -F "$PART_ROOT"
 
-# 5. Mounting & Directory Initialization (FIXED STEP 3/7)
+# 5. Mounting & Directory Initialization
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
 echo -e "${C_MAGENTA}${C_BOLD} [3/7] Mounting filesystems & bootstrapping directories...${C_RESET}"
