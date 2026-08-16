@@ -162,20 +162,23 @@ swapon "$PART_SWAP"
 # 6. Installing Repositories & Base Packages
 clear
 echo -e "${C_MAGENTA}======================================================${C_RESET}"
-echo -e "${C_MAGENTA}${C_BOLD} [4/7] Enabling Nonfree Repos & Installing Packages... ${C_RESET}"
+echo -e "${C_MAGENTA}${C_BOLD} [4/7] Synchronizing Repositories & Installing Base... ${C_RESET}"
 echo -e "${C_MAGENTA}======================================================${C_RESET}\n"
 
-# Step A: Install base keys & sync main repository
-XBPS_ARCH=x86_64 xbps-install -Sy -R https://repo-default.voidlinux.org/current -r /mnt
+# Step A: Explicitly define repository URL to guarantee pool resolution
+REPO_URL="https://repo-default.voidlinux.org/current"
 
-# Step B: Install Nonfree & Multilib repository packages
-XBPS_ARCH=x86_64 xbps-install -y -R https://repo-default.voidlinux.org/current -r /mnt \
+# Step B: Synchronize repository database into target directory
+XBPS_ARCH=x86_64 xbps-install -S -R "$REPO_URL" -r /mnt
+
+# Step C: Install repository extension packages first
+XBPS_ARCH=x86_64 xbps-install -y -R "$REPO_URL" -r /mnt \
   void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
 
-# Step C: Sync all newly added repositories
-XBPS_ARCH=x86_64 xbps-install -Sy -r /mnt
+# Step D: Sync again to register new repos
+XBPS_ARCH=x86_64 xbps-install -S -r /mnt
 
-# Step D: Install full software suite
+# Step E: Install base-system and desktop packages
 XBPS_ARCH=x86_64 xbps-install -y -r /mnt \
   base-system xfce4 Thunar lightdm lightdm-gtk-greeter grub-x86_64-efi NetworkManager \
   git curl wget picom plank cava jq htop unzip ca-certificates sudo \
